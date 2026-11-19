@@ -12,6 +12,7 @@
 - [x] **REQ-09**: Streamlit UI integrating KB sidebar, explicit indexing/deletion/reset, **Vector Retrieval Testing**, **PDF Summary**, **Practice Questions** (with Show/Hide Answers toggle and delete/reset cache invalidation), and preserved **Quick Q&A (Groq)** (`app.py`).
 - [x] **REQ-10**: Full automated offline test suite + opt-in real-model smoke test + live Streamlit health check (`HTTP 200`) + updated `README.md` and `.planning/` docs.
 - [x] **REQ-12**: Interactive practice & quiz evaluation (Stage 6.3) with discrete 0.0/0.5/1.0 scoring, deterministic MCQ/True-False grading, batched LLM or deterministic short-answer grading, answer preservation across reruns/failures, zero question re-generation on retry, and missed questions review (`src/generation/quiz_evaluator.py`, `app.py`).
+- [x] **REQ-17**: Initialize Git repository with `.gitignore` strictly protecting `.env`, `data/`, `venv/`, and build/cache artifacts.
 
 ## Planned Future Work (Not Yet Implemented)
 - [ ] **REQ-11**: Ollama / Qwen local LLM integration (`OllamaLLMProvider`).
@@ -19,4 +20,3 @@
 - [ ] **REQ-14**: Multi-turn PDF chatbot with persistent chat history.
 - [ ] **REQ-15**: OCR support for scanned/image-only PDFs.
 - [ ] **REQ-16**: Timers and timed quiz challenge mode.
-- [ ] **REQ-17**: Initialize Git repository with `.gitignore` protecting `.env`, `venv/`, and local `data/vector_store/`.
