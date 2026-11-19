@@ -1,0 +1,75 @@
+# ==============================================================================
+# Study Bot .gitignore
+# Strictly excludes all confidential files, secrets, local vector stores, and environments.
+# ==============================================================================
+
+# Secrets and environment configurations (CRITICAL)
+.env
+.env.*
+!.env.example
+*.env
+
+# Local vector store, databases, uploaded PDFs, and persistent user data
+data/
+data/**
+*.faiss
+*.index
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# C-extensions and build artifacts
+build/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Testing, coverage, and cache directories
+.pytest_cache/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+htmlcov/
+
+# Editor and IDE configurations
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+*~
+
+# Operating system files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs and runtime files
+*.log
+scratch/
+tmp/
