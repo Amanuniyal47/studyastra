@@ -1698,7 +1698,7 @@ class TestStage9PomodoroUI(unittest.TestCase):
                     + [s.value for s in at.subheader]
                 )
                 self.assertIn("Study Timer & Focus", all_text)
-                self.assertIn("🎯 Focus Session", all_text)
+                self.assertIn("Focus Session", all_text)
                 self.assertIn("25:00", all_text)
                 self.assertTrue(len([b for b in at.button if b.key == "pomo_start_btn"]) >= 1)
 
@@ -1751,7 +1751,7 @@ class TestStage9PomodoroUI(unittest.TestCase):
                     + [c.value for c in at.caption]
                     + [s.value for s in at.subheader]
                 )
-                self.assertIn("☕ Short Break", all_text)
+                self.assertIn("Short Break", all_text)
                 self.assertIn("05:00", all_text)
 
                 # Customize durations
@@ -1785,6 +1785,27 @@ class TestStage9PomodoroUI(unittest.TestCase):
                 self.assertEqual(stats["completed_focus_sessions"], 1)
                 self.assertEqual(stats["current_streak"], 1)
                 self.assertEqual(len(stats["session_history"]), 1)
+
+    def test_05_pomodoro_audio_chime_toggle_and_trigger(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store_dir = Path(tmpdir) / "vector_store"
+            stats_file = Path(tmpdir) / "study_stats.json"
+            with (
+                patch.object(config, "VECTOR_STORE_DIR", store_dir),
+                patch.object(config, "STUDY_STATS_FILE", stats_file),
+            ):
+                at = AppTest.from_file(APP_PATH).run()
+                self.assertFalse(at.exception)
+
+                # Audio chime checkbox is present and defaults to True
+                sound_toggles = [c for c in at.checkbox if c.key == "pomo_sound_enabled"]
+                self.assertEqual(len(sound_toggles), 1)
+                self.assertTrue(sound_toggles[0].value)
+
+                # Uncheck sound toggle
+                at = sound_toggles[0].uncheck().run()
+                self.assertFalse(at.exception)
+                self.assertFalse(at.session_state["pomo_sound_enabled"])
 
 
 class TestStage9ChallengeUI(unittest.TestCase):

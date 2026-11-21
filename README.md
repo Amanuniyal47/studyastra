@@ -1,103 +1,156 @@
-# StudyAstra — AI-Powered Python Study Assistant
+# StudyAstra — AI-Powered Academic Study Companion
 
-StudyAstra is a local-first, AI-powered study companion and academic knowledge assistant built with Python and Streamlit. It allows students and researchers to ingest PDF textbooks and lecture slides, extract structured text, generate local vector embeddings, perform semantic similarity retrieval, and interact with their study materials through multi-turn conversational chat, automated summaries, practice questions, interactive quizzes, academic study notes, and flashcards.
+StudyAstra is a local-first, privacy-focused academic study assistant and document intelligence platform built with Python and Streamlit. Designed for students, researchers, and self-directed learners, StudyAstra transforms PDF course materials—including textbooks, lecture slides, and syllabus documents—into an interactive, offline study environment powered by local language models and dense vector search.
 
-The system is designed with a **privacy-first, offline-capable architecture**: all vector embeddings and search indexes run locally on the user's computer via Sentence Transformers and FAISS, while language generation is powered by a local **Ollama** instance running **Qwen2.5 7B**. Zero cloud API keys or external subscription services are required.
-
----
-
-## 1. Features
-
-StudyAstra provides a unified study interface organized into eight dedicated modules:
-
-- **PDF Ingestion & Text Extraction:** Page-by-page text extraction from uploaded PDF documents using PyMuPDF (`pymupdf`) with layout-aware column sorting, boundary preservation, and SHA-256 deduplication.
-- **Conversational PDF Chatbot (RAG):** Multi-turn conversational study assistant grounded strictly in document context, featuring sliding-window conversation memory, conversational query rewriting, and verifiable source citations with page attribution.
-- **PDF Summarization:** Single-PDF summarization across Full Document, Page Range, Section, or Topic with prompt-aware hierarchical map-reduce and configurable length (Short, Medium, Detailed).
-- **Practice Question Generation:** Generates grounded practice questions across four types: Multiple Choice (MCQ), Short Answer, True/False, and Mixed distributions, with Easy, Medium, and Hard difficulty levels.
-- **Interactive Quiz & Evaluation Engine:** Interactive testing environment with hidden answers during attempts, deterministic grading for MCQ/TF, batched semantic grading for short answers, and detailed review of missed pages.
-- **Academic Study Notes:** Generates structured, high-yield study notes with executive summaries, core technical definitions, mechanisms, and key exam takeaways.
-- **Flashcard Deck Generator & Flip Viewer:** Interactive flippable study flashcards with Anki CSV and Markdown export options.
-- **Vector Retrieval Testing:** Direct semantic similarity inspection tool that queries the FAISS vector index across all documents or filtered to a single PDF without calling any LLM.
-- **Study Timers & Challenges:** Built-in Pomodoro study timer, countdown challenge timers, and timed quiz sessions to support disciplined study habits.
+The system integrates conversational Retrieval-Augmented Generation (RAG), hierarchical map-reduce summarization, automated practice questions, interactive quizzes, academic study notes, flashcards with Anki export, and study timers featuring synthesized acoustic chimes.
 
 ---
 
-## 2. Technology Stack
+## 1. Problem Statement & Motivation
 
-| Technology | Role in StudyAstra |
-| :--- | :--- |
-| **Python** (3.11+ / 3.14) | Core programming language for application logic, pipeline, and tests |
-| **Streamlit** (v1.42+) | Reactive web user interface, session state management, and token streaming |
-| **Ollama** | Local LLM inference server managing the Qwen2.5 7B model |
-| **Qwen2.5 7B** (`qwen2.5:7b`) | Primary local language model for grounded chat, summaries, notes, and quizzes |
-| **Sentence Transformers** | Local dense semantic embedding generation using `all-MiniLM-L6-v2` |
-| **FAISS** (`faiss-cpu`) | High-performance vector index (`IndexIDMap2` wrapping `IndexFlatIP`) |
-| **PyMuPDF** (`pymupdf`) | Fast, in-memory PDF text extraction and layout sorting |
-| **PyTorch** (`torch` CPU) | Tensor computation backend for local embedding generation |
-| **HTTPX** | Resilient asynchronous and synchronous HTTP client for Ollama communication |
+Traditional digital study workflows present several acute challenges:
+
+1. **High Cognitive Overhead:** Textbooks and academic syllabi often span hundreds of pages. Manually locating definitions, tracing interconnected concepts, and extracting key exam takeaways consumes disproportionate study time.
+2. **Privacy Risks of Cloud AI:** Uploading unpublished research, proprietary course materials, or personal lecture notes to public commercial AI clouds exposes sensitive academic data to third-party retention and model training.
+3. **Internet Dependency & Distractions:** Cloud-reliant study tools fail in offline environments (libraries, transit, remote campuses) and expose students to browser-based distractions.
+4. **Passive Reading vs. Active Recall:** Simply reading PDF documents is among the least effective retention strategies. Students benefit significantly from immediate self-testing, practice questions, and structured focus intervals.
+
+**StudyAstra solves this by running 100% locally on your personal computer.** Vector indexing runs locally via FAISS and Sentence Transformers, and generative intelligence is powered by **Qwen2.5 7B** running on your local machine via **Ollama**. Zero cloud subscriptions or API keys are required.
 
 ---
 
-## 3. Architecture Overview
+## 2. Core Features
 
-StudyAstra decouples document ingestion, embedding generation, and vector retrieval from the language model backend.
+StudyAstra provides a unified academic interface organized into seven student-facing modules:
+
+- **Conversational PDF Chat (RAG):** Multi-turn study dialogue strictly grounded in your active PDF document. Features sliding-window conversation memory, multi-thread management, conversational query rewriting, and verifiable page-level source citations.
+- **Hierarchical PDF Summarization:** Generates high-fidelity summaries across four scopes: Full Document, Specific Page Range, Chapter Section, or Custom Topic. Employs a token-budgeted map-reduce algorithm with configurable summary depth (Short, Medium, Detailed).
+- **Academic Study Notes:** Automatically synthesizes comprehensive, high-yield study notes formatted with executive overviews, core technical definitions, operational mechanisms, and key exam takeaways. Exportable directly to Markdown.
+- **Practice Question Generation:** Generates grounded practice questions across four formats: Multiple Choice (MCQ), Short Answer, True/False, and Mixed distributions, across Easy, Medium, and Hard difficulty tiers.
+- **Interactive Quiz & Evaluation Engine:** Stateful testing interface that hides answers during attempts, tracks timing, evaluates multiple-choice questions deterministically, evaluates short answers through batched semantic grading, and provides detailed feedback on missed concepts.
+- **Active Recall Flashcards:** Interactive flip-card study interface with Anki-compatible CSV export and Markdown deck downloads.
+- **Study Timers & Challenges:** Built-in Pomodoro focus timer and countdown study challenge sprint tracker, featuring synthesized Web Audio acoustic completion chimes and persistent study streak tracking.
+- **Quick Q&A:** Fast single-turn question-answering mode for quick factual queries grounded directly in document chunks.
+
+*(Note: An internal Vector Retrieval Testing tab is available for developers and instructors via `?dev=true` or in test environments).*
+
+---
+
+## 3. Technology Stack
+
+| Component | Technology | Version | Purpose |
+| :--- | :--- | :--- | :--- |
+| **Language** | Python | 3.11 – 3.14 (64-bit) | Application logic, retrieval pipeline, and test harness |
+| **UI Framework** | Streamlit | `>=1.42.0` | Reactive web interface, session state, and token streaming |
+| **Local LLM Server** | Ollama | Latest | Local model execution and HTTP inference endpoint |
+| **Language Model** | Qwen2.5 7B | `qwen2.5:7b` | Primary local LLM for chat, notes, summaries, and quizzes |
+| **Embeddings** | Sentence Transformers | `>=3.4.0` | Dense semantic embeddings (`all-MiniLM-L6-v2`, 384 dimensions) |
+| **Vector Storage** | FAISS CPU | `>=1.9.0` | High-performance vector similarity search (`IndexIDMap2` + `IndexFlatIP`) |
+| **PDF Extraction** | PyMuPDF | `>=1.25.0` | Fast text extraction, boundary preservation, and layout sorting |
+| **Tensor Backend** | PyTorch (CPU) | `>=2.2.0` | Local tensor calculations for embedding generation |
+| **HTTP Client** | HTTPX | `>=0.27.0` | High-performance client for Ollama streaming and non-blocking health checks |
+
+---
+
+## 4. System Architecture
+
+StudyAstra decouples document ingestion, embedding generation, and vector retrieval from the generative language model backend:
 
 ```mermaid
 flowchart TD
     subgraph Ingestion ["1. Document Ingestion Pipeline"]
-        PDF["PDF Upload"] --> Extractor["PyMuPDF Text Extractor"]
+        PDF["PDF Upload (.pdf)"] --> Extractor["PyMuPDF Layout-Aware Extractor"]
         Extractor --> Chunker["Token-Aware Chunker (220 tokens, 40 overlap)"]
     end
 
-    subgraph Embedding ["2. Embedding & Persistence"]
+    subgraph Embedding ["2. Local Vector Store"]
         Chunker --> Embedder["SentenceTransformer (all-MiniLM-L6-v2)"]
         Embedder --> FAISS["FAISS IndexIDMap2 (IndexFlatIP, 384-dim)"]
         FAISS --> Storage[("Transactional Storage: data/vector_store/")]
     end
 
-    subgraph Retrieval ["3. Semantic Retrieval"]
-        UserQuery["User Query / Chat / Topic"] --> QueryEmbed["Query Embedding"]
+    subgraph Retrieval ["3. Semantic Retrieval & Memory"]
+        Query["User Query / Chat"] --> Rewriter["Conversational Query Rewriter"]
+        Rewriter --> QueryEmbed["Query Embedding"]
         QueryEmbed --> Retriever["Retriever (Top-K Similarity Search)"]
         Storage --> Retriever
     end
 
     subgraph Generation ["4. Local Generation Engine"]
-        Retriever --> ContextBuilder["Context & Prompt Builder"]
-        ContextBuilder --> Ollama["Ollama Client (HTTPX)"]
-        Ollama --> Qwen["Qwen2.5 7B (Local LLM)"]
-        Qwen --> UI["Streamlit Interface (Streaming Output)"]
+        Retriever --> ContextBuilder["Context & Grounding Prompt Builder"]
+        ContextBuilder --> OllamaClient["Ollama Client (HTTPX Streaming)"]
+        OllamaClient --> Qwen["Qwen2.5 7B (Local Model)"]
+        Qwen --> UI["Streamlit Interface (Interactive Feedback & Audio Chimes)"]
     end
 ```
 
-### Core Architecture Principles
-1. **Strict Context Adherence:** Generation prompts instruct the model to answer exclusively from the retrieved document context. When information is missing, the model explicitly declines rather than hallucinating.
-2. **Deterministic Source Attribution:** Source chunk IDs and page numbers are derived deterministically from the FAISS metadata store—never from LLM guesses.
-3. **Transactional Storage:** Vector store mutations use generation-based transactional manifests (`manifest.json`) with safe atomic replacement, preventing index corruption.
-4. **Single-Instance Safety:** An OS-level kernel byte lock (`.app.lock`) ensures only one StudyAstra process accesses the vector database at a time.
+### Key Architectural Safeguards
+1. **Strict Context Adherence:** Prompts enforce that the model answers exclusively using retrieved document evidence. If information is absent, the model explicitly declines rather than hallucinating.
+2. **Deterministic Source Attribution:** Source chunk IDs, filenames, and page numbers are derived deterministically from FAISS metadata, ensuring verifiable citations.
+3. **Transactional Storage & Rollback:** Vector store modifications use generation-based transactional manifests (`manifest.json`) with atomic file replacements, protecting against index corruption during power outages or process termination.
+4. **Single-Instance Application Lock:** An OS-level kernel byte-range lock (`.app.lock`) prevents multiple StudyAstra processes from concurrently accessing the vector index.
 
 ---
 
-## 4. Prerequisites
+## 5. RAG Pipeline & Document Processing
 
-Before installing StudyAstra, ensure your system meets the following requirements:
+### Layout-Aware PDF Ingestion
+- Uploaded PDFs are parsed page-by-page using PyMuPDF (`fitz`).
+- Column-aware spatial sorting preserves reading order across multi-column textbooks and research papers.
+- SHA-256 content hashes prevent duplicate document indexing.
 
-- **Operating System:** Windows 10/11 (64-bit), macOS, or Linux.
-- **Python Version:** Python 3.11, 3.12, 3.13, or 3.14 (64-bit strictly required for PyTorch and FAISS).
-- **RAM:** Minimum 8 GB (16 GB recommended for running Ollama Qwen2.5 7B alongside Streamlit).
-- **GPU (Optional):** NVIDIA GPU with 6+ GB VRAM for accelerated LLM inference; CPU inference is also supported via Ollama layer offloading.
+### Chunking & Dense Embeddings
+- Text streams are partitioned into chunks of **220 tokens** with a **40-token overlap** to maintain semantic continuity across chunk boundaries.
+- Chunks preserve paragraph and sentence boundaries.
+- Each chunk is embedded into a **384-dimensional dense vector** using `sentence-transformers/all-MiniLM-L6-v2`.
+- Embeddings are L2-normalized so that inner product (`IndexFlatIP`) calculates exact cosine similarity.
+
+### Conversational Memory & Query Rewriting
+- Chat sessions maintain multi-turn context using sliding-window token memory.
+- Pronouns and ambiguous follow-ups (e.g., *"What were its main causes?"*) are rewritten into self-contained retrieval queries before querying FAISS, ensuring high-accuracy semantic retrieval throughout multi-turn dialogues.
+
+---
+
+## 6. Academic UI/UX Design System
+
+Stage 12 and 12.1 introduce a custom academic design system tailored for focus and readability:
+
+- **Academic Color Palette:**
+  - Background: Warm Ivory (`#F7F8F6`)
+  - Surfaces & Cards: Crisp White (`#FFFFFF`) with hairline borders (`#E5E9E6`)
+  - Typography: Charcoal (`#202A33`) and Muted Slate (`#68737D`)
+  - Accents: Deep Forest Green (`#315C50`, hover `#25493F`) and Soft Sage (`#DCE9E3`)
+- **Anti-Clipping Typography:** Balanced heading hierarchy preventing clipped titles across viewports.
+- **Compact Sidebar:** Bounded desktop width (`290px–320px`) with uppercase micro-headers and active thread highlighting.
+- **Dashed Upload Dropzone:** Minimal dashed dropzone with hover transitions and clear format guidance (PDF, up to 50MB).
+- **Assistant Typing Indicator:** Three small forest-green pulsing dots (`#315C50`) displayed while waiting for local tokens, transitioning smoothly into token streaming.
+- **Web Audio API Timer Notifications:** Synthesizes client-side acoustic completion chimes with zero external audio dependencies:
+  - Focus & Challenge completion: Pure 528 Hz bell chime with smooth exponential decay.
+  - Break completion: Ascending two-tone chime (440 Hz → 587 Hz).
+  - Configurable sound toggle (`pomo_sound_enabled`) in timer settings.
+
+---
+
+## 7. Prerequisites & System Requirements
+
+- **Operating System:** Windows 10/11 (64-bit), macOS (Apple Silicon or Intel), or Linux (Ubuntu 20.04+).
+- **Python:** Python 3.11, 3.12, 3.13, or 3.14 (64-bit strictly required).
+- **Memory (RAM):** 8 GB minimum; 16 GB recommended for smooth local LLM inference alongside Streamlit.
+- **Storage:** ~6 GB free disk space (for Qwen2.5 7B model weights and embedding caches).
+- **GPU (Optional):** NVIDIA GPU with 6+ GB VRAM provides accelerated token generation; CPU inference is fully supported via Ollama layer offloading.
 - **Ollama:** Installed and running locally.
 
 ---
 
-## 5. Installation and Setup
+## 8. Installation & Setup
 
-### 1. Clone the Repository
+### Step 1: Clone the Repository
 ```bash
 git clone https://github.com/Amanuniyal47/studyastra.git
 cd studyastra
 ```
 
-### 2. Create and Activate a Virtual Environment
+### Step 2: Create and Activate a Virtual Environment
 
 **On Windows (PowerShell):**
 ```powershell
@@ -111,7 +164,7 @@ python3 -m venv venv
 source venv/bin/activate
 ```
 
-### 3. Install Dependencies
+### Step 3: Install Dependencies
 
 For Windows CPU installations, install the CPU-optimized PyTorch wheel first, then install the remaining requirements:
 
@@ -119,44 +172,31 @@ For Windows CPU installations, install the CPU-optimized PyTorch wheel first, th
 # Step A: Install PyTorch CPU wheel
 pip install torch --index-url https://download.pytorch.org/whl/cpu
 
-# Step B: Install project dependencies
+# Step B: Install dependencies
 pip install -r requirements.txt
 ```
 
-*(On Linux / macOS or systems with CUDA, running `pip install -r requirements.txt` directly will install PyTorch from PyPI).*
+*(On Linux / macOS or machines with CUDA, running `pip install -r requirements.txt` directly installs compatible PyTorch packages).*
 
----
+### Step 4: Install and Start Ollama
 
-## 6. Local Ollama & Model Setup
+1. Download Ollama from [ollama.com/download](https://ollama.com/download).
+2. Start the Ollama background daemon:
+   ```bash
+   ollama serve
+   ```
+3. In a separate terminal, download the Qwen2.5 7B model (~4.7 GB):
+   ```bash
+   ollama pull qwen2.5:7b
+   ```
+4. Verify the model is installed:
+   ```bash
+   ollama list
+   ```
 
-StudyAstra uses Ollama to manage and serve the local **Qwen2.5 7B** language model.
+### Step 5: Configure Environment Variables
 
-### 1. Install Ollama
-Download and install Ollama from [ollama.com/download](https://ollama.com/download).
-
-### 2. Start the Ollama Service
-Ensure Ollama is running in the background:
-```bash
-ollama serve
-```
-
-### 3. Download the Qwen2.5 7B Model
-Download the required model weights (approximately 4.7 GB):
-```bash
-ollama pull qwen2.5:7b
-```
-
-### 4. Verify Model Availability
-```bash
-ollama list
-```
-Confirm that `qwen2.5:7b` appears in the list of installed models.
-
----
-
-## 7. Configuration
-
-Copy the example environment file to create your local `.env`:
+Create your local `.env` file from the provided template:
 
 **On Windows (PowerShell):**
 ```powershell
@@ -168,133 +208,83 @@ Copy-Item .env.example .env
 cp .env.example .env
 ```
 
-The default `.env.example` is pre-configured for local Ollama execution:
-
+The pre-configured defaults are optimized for local Ollama execution:
 ```ini
-# LLM Provider Configuration
 LLM_PROVIDER=ollama
-
-# Ollama Local LLM Configuration (Qwen2.5 7B)
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=qwen2.5:7b
 OLLAMA_TEMPERATURE=0.2
 OLLAMA_MAX_TOKENS=2048
 OLLAMA_CONTEXT_WINDOW=4096
-OLLAMA_TIMEOUT_SECONDS=60.0
-OLLAMA_KEEP_ALIVE=5m
-
-# Local Embeddings & Vector Store
 EMBEDDING_MODEL=all-MiniLM-L6-v2
 TOP_K=3
-SUMMARY_MAX_BATCH_TOKENS=2400
-QUESTION_MAX_BATCH_TOKENS=2400
-NOTES_MAX_BATCH_TOKENS=2400
-FLASHCARD_MAX_BATCH_TOKENS=2400
 ```
-
-> [!NOTE]
-> `GROQ_API_KEY` is completely optional. If left blank, StudyAstra operates in 100% offline local mode using Ollama.
 
 ---
 
-## 8. Running the Application
+## 9. Running the Application
 
-### Preflight Diagnostics (Recommended)
-Before launching the app, run the built-in diagnostic script to verify system compatibility:
+### 1. Run Preflight Diagnostics (Recommended)
+Verify that your Python environment, Ollama connection, and configuration are healthy:
 ```bash
 python scripts/check_env.py
 ```
 
-### Launch the Streamlit App
-Start the web interface:
+### 2. Pre-cache Embedding Model (Optional for completely offline use)
+To pre-download the embedding model before going offline:
+```bash
+python scripts/prepare_model.py
+```
+
+### 3. Launch StudyAstra
 ```bash
 streamlit run app.py
 ```
 
-The application will launch in your default web browser at:
-**[http://localhost:8501](http://localhost:8501)**
+Open your browser to: **[http://localhost:8501](http://localhost:8501)**
 
 ---
 
-## 9. Running the Test Suite
+## 10. Automated Test Suite
 
-StudyAstra includes an automated unit and integration test suite covering vector indexing, transactional rollback, question generation schemas, quiz evaluation, conversation memory, and application lifecycle locks.
+StudyAstra includes an automated unit and integration test suite covering document chunking, transactional FAISS storage, Ollama streaming, question generation schemas, quiz evaluation, sliding memory, and UI interactions.
 
-Run the test suite from the repository root:
+Run the entire suite from the repository root:
 ```bash
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-### Verified Test Results
-- **Total Tests:** 479
-- **Passed:** 478
+### Verified Test Baseline
+- **Total Tests:** 481
+- **Passed:** 480
 - **Skipped:** 1 (`tests.test_embeddings.TestRealEmbeddingModelSmoke` — opt-in live model download test)
-- **Failures / Errors:** 0
+- **Failures & Errors:** 0
+- **Execution Time:** ~3 minutes
 
-All 478 tests run completely offline without requiring GPU hardware, external network access, or an active Ollama instance.
-
----
-
-## 10. Project Directory Structure
-
-```text
-studyastra/
-├── app.py                              # Streamlit entry point & unified UI tabs
-├── requirements.txt                    # Verified runtime dependency manifest
-├── requirements-windows-prod.txt       # Production-pinned Windows manifest
-├── .env.example                        # Safe configuration template
-├── .gitignore                          # Excludes local data, keys, models & locks
-├── README.md                           # Project documentation
-├── scripts/
-│   ├── check_env.py                    # Preflight environment diagnostics
-│   └── prepare_model.py                # Embedding model cache preloader
-├── src/
-│   ├── config.py                       # Centralized configuration & validators
-│   ├── chat/                           # Multi-turn conversational RAG subsystem
-│   │   ├── conversation_memory.py      # Sliding-window memory & thread managers
-│   │   ├── chat_orchestrator.py        # Centralized turn execution & retrieval
-│   │   ├── chat_prompts.py             # Prompt engineering & strict refusal rules
-│   │   └── query_rewriter.py           # Ambiguous follow-up query rewrite engine
-│   ├── ingestion/
-│   │   ├── pdf_loader.py               # PyMuPDF text extractor & layout sorting
-│   │   └── chunker.py                  # Token-aware sentence/paragraph chunker
-│   ├── retrieval/
-│   │   ├── embeddings.py               # Local SentenceTransformer service
-│   │   ├── vector_store.py             # Transactional FAISS storage & generations
-│   │   └── retriever.py                # Top-K semantic similarity search
-│   ├── generation/
-│   │   ├── llm_provider.py             # Ollama & base provider abstractions
-│   │   ├── answer_generator.py         # Grounded single-turn Q&A engine
-│   │   ├── summarizer.py               # Hierarchical map-reduce summarizer
-│   │   ├── question_generator.py       # Practice question batch generator
-│   │   ├── quiz_evaluator.py           # MCQ, TF & short-answer quiz evaluator
-│   │   ├── study_notes_generator.py    # Academic structured notes generator
-│   │   ├── flashcard_generator.py      # Schema-validated flashcard generator
-│   │   └── explanation_generator.py    # Multi-level concept explainer
-│   └── utils/
-│       ├── app_lock.py                 # Single-instance OS byte-range locker
-│       ├── timer_manager.py            # Pomodoro & study challenge timers
-│       ├── study_statistics.py         # Local quiz and study performance stats
-│       └── file_utils.py               # SHA-256 document hashing & helpers
-└── tests/                              # Comprehensive offline unit test suite (479 tests)
-```
+All 480 automated tests run completely offline with mocked providers and temporary vector directories, requiring zero external network access.
 
 ---
 
-## 11. Known Limitations
+## 11. Offline Functionality & Initial Setup Notice
 
-- **Image-Only & Scanned PDFs:** Text extraction relies on embedded text streams via PyMuPDF. Scanned document images without an embedded OCR text layer will return an empty text notice.
-- **Hardware-Dependent Inference:** Generation latency depends on local hardware. On an NVIDIA RTX 4050 (6 GB VRAM) or equivalent, token streaming is near real-time (~30-50 tokens/sec); on CPU-only machines, generation takes longer depending on CPU core count.
-- **First-Run Embedding Model Download:** On the very first run, Sentence Transformers downloads the `all-MiniLM-L6-v2` model weights (~90 MB) into the local user cache (`~/.cache/huggingface/hub/`). Subsequent runs are completely offline.
+StudyAstra is designed for **100% offline daily operation**, but requires an initial setup phase:
 
----
-
-## 12. Academic Project Notice
-
-StudyAstra was developed as a personal academic software engineering project to explore offline-capable Retrieval-Augmented Generation (RAG), local LLM orchestration, and computer-assisted study workflows.
+1. **Initial Setup (Online):** Internet access is required once to install Python packages, pull `qwen2.5:7b` via Ollama (~4.7 GB), and download the `all-MiniLM-L6-v2` model weights (~90 MB).
+2. **Subsequent Study Sessions (Completely Offline):** Once the models are downloaded, StudyAstra operates entirely offline. No data, queries, or documents leave your computer.
 
 ---
 
-## 13. License
+## 12. Known Limitations & Troubleshooting
 
-This repository does not currently include an open-source software license. All rights are reserved by the author. A formal open-source license may be added in a future release.
+- **Scanned / Image-Only PDFs:** Text extraction uses PyMuPDF's digital text engine. Scanned PDFs that lack an embedded OCR text layer will return an empty text notice. Pre-OCR your scanned documents before uploading.
+- **Hardware-Dependent Generation Speed:** Token generation speed depends on your local hardware. On modern GPUs (e.g., RTX 3060/4050+), generation streams at ~30–50 tokens/sec. On CPU-only systems, generation is slower (~5–15 tokens/sec).
+- **Ollama Daemon Required:** If answers fail to generate, verify that `ollama serve` is running in your terminal or system tray.
+- **Single-Instance Enforcement:** If you see an Application Lock Conflict notice, another StudyAstra window or Python process is already using the data directory. Close the other process to release the `.app.lock`.
+
+---
+
+## 13. Academic Project Notice & License
+
+StudyAstra was developed as a personal academic software engineering project exploring offline-capable Retrieval-Augmented Generation, local language models, and student productivity interfaces.
+
+All rights are reserved by the author. A formal open-source license may be added in a future release.

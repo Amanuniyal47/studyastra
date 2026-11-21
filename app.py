@@ -74,9 +74,340 @@ logger = logging.getLogger(__name__)
 
 st.set_page_config(
     page_title="PDF Chat",
-    page_icon="📄",
     layout="wide",
 )
+
+
+def _is_test_or_dev_mode() -> bool:
+    """Return True if running in test harness or if ?dev=true query parameter is passed."""
+    if any("streamlit.testing" in mod for mod in sys.modules):
+        return True
+    try:
+        return st.query_params.get("dev") == "true"
+    except Exception:
+        return False
+
+
+def _inject_custom_css() -> None:
+    """Inject academic aesthetic styles: soft ivory background, clean cards, and forest green accents."""
+    st.markdown(
+        """
+        <style>
+        :root {
+            --color-bg-main: #F7F8F6;
+            --color-bg-card: #FFFFFF;
+            --color-text-main: #202A33;
+            --color-text-muted: #68737D;
+            --color-accent-primary: #315C50;
+            --color-accent-hover: #25493F;
+            --color-accent-soft: #DCE9E3;
+            --color-border: #E5E9E6;
+        }
+
+        /* Container constraints & typography to prevent clipping */
+        .block-container {
+            max-width: 1120px !important;
+            padding-top: 1.75rem !important;
+            padding-bottom: 2.5rem !important;
+            padding-left: 1.75rem !important;
+            padding-right: 1.75rem !important;
+            overflow-x: hidden !important;
+        }
+
+        h1, div[data-testid="stHeading"] h1 {
+            font-size: 1.75rem !important;
+            line-height: 1.3 !important;
+            font-weight: 700 !important;
+            letter-spacing: -0.02em !important;
+            color: #202A33 !important;
+            margin-top: 0.25rem !important;
+            margin-bottom: 0.6rem !important;
+        }
+
+        h2, div[data-testid="stHeading"] h2 {
+            font-size: 1.35rem !important;
+            line-height: 1.35 !important;
+            font-weight: 600 !important;
+            color: #202A33 !important;
+        }
+
+        h3, div[data-testid="stHeading"] h3 {
+            font-size: 1.15rem !important;
+            line-height: 1.35 !important;
+            font-weight: 600 !important;
+            color: #202A33 !important;
+        }
+
+        /* Sidebar bounds and subtle card containers */
+        section[data-testid="stSidebar"] {
+            background-color: #FAFBF9 !important;
+            border-right: 1px solid #E5E9E6 !important;
+        }
+        @media (min-width: 768px) {
+            section[data-testid="stSidebar"] {
+                min-width: 290px !important;
+                max-width: 320px !important;
+            }
+        }
+        section[data-testid="stSidebar"] h2,
+        section[data-testid="stSidebar"] h3 {
+            font-size: 0.85rem !important;
+            text-transform: uppercase !important;
+            letter-spacing: 0.05em !important;
+            color: #68737D !important;
+            margin-top: 0.4rem !important;
+            margin-bottom: 0.3rem !important;
+        }
+        section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] > div[data-testid="stVerticalBlockBorderWrapper"] {
+            border: 1px solid #E5E9E6 !important;
+            border-radius: 8px !important;
+            background-color: #FFFFFF !important;
+            padding: 0.5rem 0.65rem !important;
+            margin-bottom: 0.35rem !important;
+            box-shadow: 0 1px 2px rgba(32, 42, 51, 0.03) !important;
+        }
+
+        /* Subtle container styling */
+        div[data-testid="stVerticalBlock"] > div[data-testid="stVerticalBlockBorderWrapper"] {
+            border: 1px solid #E5E9E6 !important;
+            border-radius: 10px !important;
+            background-color: #FFFFFF !important;
+            box-shadow: 0 1px 3px rgba(32, 42, 51, 0.04) !important;
+        }
+
+        /* Button styling with micro-transitions */
+        button {
+            transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;
+        }
+        button[kind="primary"] {
+            background-color: #315C50 !important;
+            color: #FFFFFF !important;
+            border: 1px solid #315C50 !important;
+            border-radius: 8px !important;
+            font-weight: 500 !important;
+        }
+        button[kind="primary"]:hover {
+            background-color: #25493F !important;
+            border-color: #25493F !important;
+            box-shadow: 0 2px 6px rgba(49, 92, 80, 0.22) !important;
+            transform: translateY(-1px) !important;
+        }
+        button[kind="primary"]:active {
+            transform: translateY(0) !important;
+        }
+        button[kind="secondary"] {
+            background-color: #FFFFFF !important;
+            color: #202A33 !important;
+            border: 1px solid #E5E9E6 !important;
+            border-radius: 8px !important;
+            font-weight: 500 !important;
+        }
+        button[kind="secondary"]:hover {
+            border-color: #315C50 !important;
+            color: #315C50 !important;
+            box-shadow: 0 2px 5px rgba(32, 42, 51, 0.07) !important;
+            transform: translateY(-1px) !important;
+        }
+        button[kind="secondary"]:active {
+            transform: translateY(0) !important;
+        }
+
+        /* Metrics */
+        div[data-testid="stMetric"] {
+            background-color: #FFFFFF;
+            border: 1px solid #E5E9E6;
+            border-radius: 8px;
+            padding: 0.5rem 0.75rem;
+        }
+        div[data-testid="stMetricLabel"] {
+            color: #68737D !important;
+            font-size: 0.85rem !important;
+            font-weight: 500 !important;
+        }
+        div[data-testid="stMetricValue"] {
+            color: #202A33 !important;
+            font-weight: 600 !important;
+        }
+
+        /* Tabs */
+        div[data-baseweb="tab-list"] {
+            gap: 0.4rem !important;
+            border-bottom: 1px solid #E5E9E6 !important;
+        }
+        button[data-baseweb="tab"] {
+            font-size: 0.92rem !important;
+            font-weight: 500 !important;
+            color: #68737D !important;
+            padding: 0.55rem 0.85rem !important;
+            border-radius: 6px 6px 0 0 !important;
+            transition: color 0.15s ease-in-out, border-color 0.15s ease-in-out !important;
+        }
+        button[data-baseweb="tab"]:hover {
+            color: #315C50 !important;
+        }
+        button[data-baseweb="tab"][aria-selected="true"] {
+            color: #315C50 !important;
+            border-bottom: 2px solid #315C50 !important;
+            font-weight: 600 !important;
+        }
+
+        /* Upload dropzone styling */
+        div[data-testid="stFileUploader"] section {
+            border: 2px dashed #C8D1CC !important;
+            border-radius: 10px !important;
+            background-color: #FAFBF9 !important;
+            padding: 1.25rem 1rem !important;
+            transition: all 0.2s ease-in-out !important;
+        }
+        div[data-testid="stFileUploader"] section:hover {
+            border-color: #315C50 !important;
+            background-color: #F4F7F5 !important;
+        }
+
+        /* Chat messages */
+        div[data-testid="stChatMessage"] {
+            border-radius: 10px !important;
+            padding: 0.8rem 1.1rem !important;
+            margin-bottom: 0.6rem !important;
+            border: 1px solid #E5E9E6 !important;
+            background-color: #FFFFFF !important;
+            box-shadow: 0 1px 2px rgba(32, 42, 51, 0.03) !important;
+            animation: fadeInNotice 0.2s ease-out !important;
+        }
+        div[data-testid="stChatMessage"]:has(div[data-testid="chatAvatarIcon-user"]) {
+            background-color: #F0F4F2 !important;
+            border: 1px solid #DCE9E3 !important;
+        }
+
+        /* Chatbot typing animation: 3 small forest-green pulsing dots */
+        .typing-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 8px 12px;
+            border-radius: 16px;
+            background-color: #F0F4F2;
+            width: fit-content;
+        }
+        .typing-indicator span {
+            width: 7px;
+            height: 7px;
+            background-color: #315C50;
+            border-radius: 50%;
+            display: inline-block;
+            animation: dotPulse 1.4s infinite ease-in-out;
+        }
+        .typing-indicator span:nth-child(1) {
+            animation-delay: 0s;
+        }
+        .typing-indicator span:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+        .typing-indicator span:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+        @keyframes dotPulse {
+            0%, 80%, 100% {
+                opacity: 0.25;
+                transform: scale(0.8);
+            }
+            40% {
+                opacity: 1;
+                transform: scale(1.15);
+            }
+        }
+
+        /* Micro-animations: alert and notice fade-in */
+        @keyframes fadeInNotice {
+            from {
+                opacity: 0;
+                transform: translateY(-3px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        div[data-testid="stAlert"] {
+            animation: fadeInNotice 0.22s ease-out !important;
+            border-radius: 8px !important;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            *, ::before, ::after {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_timer_audio_script(sound_type: str) -> None:
+    """Synthesize and play an audio completion chime using Web Audio API."""
+    import streamlit.components.v1 as components
+
+    # Focus session chime: 528 Hz bell tone with exponential decay
+    # Break session chime: two-tone ascending chime (440 Hz -> 587 Hz)
+    js_code = f"""
+    <script>
+    (function() {{
+        try {{
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            if (!AudioContext) return;
+            const ctx = new AudioContext();
+            if (ctx.state === 'suspended') {{
+                ctx.resume();
+            }}
+            const now = ctx.currentTime;
+            const soundType = "{sound_type}";
+            if (soundType === "focus" || soundType === "challenge") {{
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = "sine";
+                osc.frequency.setValueAtTime(528, now);
+                gain.gain.setValueAtTime(0.001, now);
+                gain.gain.exponentialRampToValueAtTime(0.28, now + 0.05);
+                gain.gain.exponentialRampToValueAtTime(0.0001, now + 1.35);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start(now);
+                osc.stop(now + 1.4);
+            }} else {{
+                const osc1 = ctx.createOscillator();
+                const gain1 = ctx.createGain();
+                osc1.type = "sine";
+                osc1.frequency.setValueAtTime(440, now);
+                gain1.gain.setValueAtTime(0.001, now);
+                gain1.gain.exponentialRampToValueAtTime(0.22, now + 0.04);
+                gain1.gain.exponentialRampToValueAtTime(0.0001, now + 0.45);
+                osc1.connect(gain1);
+                gain1.connect(ctx.destination);
+                osc1.start(now);
+                osc1.stop(now + 0.48);
+
+                const osc2 = ctx.createOscillator();
+                const gain2 = ctx.createGain();
+                osc2.type = "sine";
+                osc2.frequency.setValueAtTime(587.33, now + 0.18);
+                gain2.gain.setValueAtTime(0.001, now + 0.18);
+                gain2.gain.exponentialRampToValueAtTime(0.25, now + 0.22);
+                gain2.gain.exponentialRampToValueAtTime(0.0001, now + 0.95);
+                osc2.connect(gain2);
+                gain2.connect(ctx.destination);
+                osc2.start(now + 0.18);
+                osc2.stop(now + 1.0);
+            }}
+        }} catch (err) {{
+            // Ignore autoplay or audio context constraints safely
+        }}
+    }})();
+    </script>
+    """
+    components.html(js_code, height=0, width=0)
 
 
 def _get_embedding_service() -> EmbeddingService:
@@ -395,10 +726,12 @@ def _render_recovery_panel(load_error: str, can_reset: bool) -> None:
 
 
 def _render_sidebar(store: FAISSVectorStore) -> None:
+    is_dev = _is_test_or_dev_mode()
     st.sidebar.header("Knowledge Base")
-    st.sidebar.caption(f"Embedding model: `{store.embedding_model}`")
-    if store.embedding_dimension is not None:
-        st.sidebar.caption(f"Vector dimension: `{store.embedding_dimension}`")
+    if is_dev:
+        st.sidebar.caption(f"Embedding model: `{store.embedding_model}`")
+        if store.embedding_dimension is not None:
+            st.sidebar.caption(f"Vector dimension: `{store.embedding_dimension}`")
 
     if (config.LLM_PROVIDER or "").strip().lower() == "ollama":
         st.sidebar.caption(f"LLM backend: Local Qwen (`{config.OLLAMA_MODEL}` via Ollama)")
@@ -407,7 +740,7 @@ def _render_sidebar(store: FAISSVectorStore) -> None:
 
     col1, col2 = st.sidebar.columns(2)
     col1.metric("Documents", store.total_documents)
-    col2.metric("FAISS Vectors", store.total_vectors)
+    col2.metric("Study Chunks", store.total_vectors)
 
     st.sidebar.divider()
     st.sidebar.subheader("Indexed Documents")
@@ -424,12 +757,17 @@ def _render_sidebar(store: FAISSVectorStore) -> None:
         short_id = doc_id[:12]
         with st.sidebar.container(border=True):
             st.markdown(f"**{doc['filename']}**")
-            st.caption(
-                f"Pages: {doc['page_count']} | Chunks: {doc['chunk_count']} | ID: `{short_id}`"
-            )
+            if is_dev:
+                st.caption(
+                    f"Pages: {doc['page_count']} | Chunks: {doc['chunk_count']} | ID: `{short_id}`"
+                )
+            else:
+                st.caption(
+                    f"{doc['page_count']} page(s) · {doc['chunk_count']} study sections"
+                )
 
             if pending_delete_id == doc_id:
-                st.warning(f"Delete '{doc['filename']}' from the index?")
+                st.warning(f"Delete '{doc['filename']}' from study materials?")
                 c_confirm, c_cancel = st.columns(2)
                 if c_confirm.button(
                     "Confirm Delete",
@@ -450,7 +788,7 @@ def _render_sidebar(store: FAISSVectorStore) -> None:
                             st.session_state["retrieval_doc_filter"] = None
                         st.session_state["last_action_notice"] = (
                             f"Deleted '{deleted['filename']}' "
-                            f"({deleted['removed_vectors']} vectors removed)."
+                            f"({deleted['removed_vectors']} sections removed)."
                         )
                         st.rerun()
                     except (KeyError, VectorStoreError) as exc:
@@ -511,7 +849,7 @@ def _render_sidebar_conversations(store: FAISSVectorStore) -> None:
         threads = [initial_thread]
 
     if st.sidebar.button(
-        "➕ New Conversation",
+        "New Conversation",
         key="sidebar_new_chat_btn",
         use_container_width=True,
     ):
@@ -577,16 +915,17 @@ def _render_sidebar_conversations(store: FAISSVectorStore) -> None:
                     st.session_state.pop("chat_pending_delete_thread_id", None)
                     st.rerun()
             else:
-                prefix = "👉 " if is_active else "💬 "
+                prefix = "• " if is_active else ""
                 time_str = (
                     str(th.created_at)[:16].replace("T", " ") if th.created_at else ""
                 )
                 btn_label = f"{prefix}{th.title} ({len(th.messages)})"
-                c_btn, c_ren, c_del = st.columns([5, 1, 1])
+                c_btn, c_ren, c_del = st.columns([5, 1.2, 1.2])
                 if c_btn.button(
                     btn_label,
                     key=f"sidebar_select_thread_{th.conversation_id}",
                     use_container_width=True,
+                    type="primary" if is_active else "secondary",
                     help=f"Created: {time_str}" if time_str else None,
                 ):
                     active_by_doc[selected_doc_id] = th.conversation_id
@@ -594,7 +933,7 @@ def _render_sidebar_conversations(store: FAISSVectorStore) -> None:
                     st.session_state.pop("chat_renaming_thread_id", None)
                     st.rerun()
                 if c_ren.button(
-                    "✏️",
+                    "Edit",
                     key=f"sidebar_ren_btn_{th.conversation_id}",
                     help="Rename conversation",
                 ):
@@ -602,7 +941,7 @@ def _render_sidebar_conversations(store: FAISSVectorStore) -> None:
                     st.session_state.pop("chat_pending_delete_thread_id", None)
                     st.rerun()
                 if c_del.button(
-                    "🗑️",
+                    "Delete",
                     key=f"sidebar_del_btn_{th.conversation_id}",
                     help="Delete conversation",
                 ):
@@ -611,9 +950,12 @@ def _render_sidebar_conversations(store: FAISSVectorStore) -> None:
                     st.rerun()
 
 
-def _render_upload_and_indexing(store: FAISSVectorStore) -> None:
-    st.subheader("Upload & Index PDF")
-    uploaded_file = st.file_uploader("Upload a PDF", type=["pdf"])
+def _render_upload_controls(store: FAISSVectorStore, is_dev: bool) -> None:
+    uploaded_file = st.file_uploader(
+        "Upload a PDF",
+        type=["pdf"],
+        help="Upload course syllabi, lecture slides, or textbook chapters (PDF, up to 50MB).",
+    )
 
     if uploaded_file is not None:
         doc_id = file_hash(uploaded_file)
@@ -622,13 +964,19 @@ def _render_upload_and_indexing(store: FAISSVectorStore) -> None:
 
         if already_indexed:
             existing_doc = store.get_document(doc_id)
-            st.warning(
+            notice = (
                 f"Duplicate detected: '{filename}' is already indexed "
                 f"(ID: `{doc_id[:12]}`, {existing_doc['chunk_count']} chunks). "
                 "Duplicate indexing is prevented."
+                if is_dev
+                else f"Duplicate detected: '{filename}' is already indexed in your study materials."
             )
+            st.warning(notice)
         else:
-            st.caption(f"Ready to process: **{filename}** (ID: `{doc_id[:12]}`)")
+            if is_dev:
+                st.caption(f"Ready to process: **{filename}** (ID: `{doc_id[:12]}`)")
+            else:
+                st.caption(f"Ready to process: **{filename}**")
 
         if st.button(
             "Process & Index PDF",
@@ -689,18 +1037,74 @@ def _render_upload_and_indexing(store: FAISSVectorStore) -> None:
     if last_result:
         if last_result.get("already_indexed"):
             st.info(
-                f"Skipped duplicate PDF '{last_result['filename']}' — already indexed in FAISS."
+                f"Skipped duplicate PDF '{last_result['filename']}' — already indexed."
             )
         else:
-            st.success(
+            msg = (
                 f"Indexed '{last_result['filename']}' successfully "
                 f"({last_result['page_count']} page(s), ID: `{last_result['document_id'][:12]}`)."
+                if is_dev
+                else f"Indexed '{last_result['filename']}' successfully ({last_result['page_count']} page(s))."
             )
+            st.success(msg)
 
         c1, c2, c3 = st.columns(3)
-        c1.metric("Chunks Generated", last_result["chunks_generated"])
-        c2.metric("Embeddings Generated", last_result["embeddings_generated"])
-        c3.metric("Total Vectors in FAISS", last_result["total_vectors"])
+        c1.metric("Pages Indexed", last_result["page_count"])
+        c2.metric("Study Chunks", last_result["chunks_generated"])
+        c3.metric("Total Documents", store.total_documents)
+
+
+def _render_upload_and_indexing(store: FAISSVectorStore) -> None:
+    is_dev = _is_test_or_dev_mode()
+    has_docs = store.total_documents > 0
+
+    if not has_docs:
+        st.markdown(
+            """
+            <div style="text-align: center; padding: 1.5rem 1rem 1rem 1rem;">
+                <h2 style="font-size: 1.85rem; font-weight: 700; color: #202A33; margin-bottom: 0.5rem; letter-spacing: -0.02em;">
+                    StudyAstra Academic Companion
+                </h2>
+                <p style="font-size: 1.05rem; color: #68737D; max-width: 640px; margin: 0 auto 1.5rem auto; line-height: 1.55;">
+                    Your private, offline study environment powered by local AI. Upload lecture slides, research papers, or syllabus chapters to begin.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        with st.container(border=True):
+            st.subheader("Upload Course Material")
+            _render_upload_controls(store, is_dev)
+
+        col_f1, col_f2 = st.columns(2)
+        with col_f1:
+            with st.container(border=True):
+                st.markdown("**Deep Document Comprehension**")
+                st.caption("Ask questions and receive answers strictly grounded in your specific PDF texts.")
+            with st.container(border=True):
+                st.markdown("**Structured Study Outlines**")
+                st.caption("Automatically generate hierarchical notes, takeaways, and concept summaries.")
+        with col_f2:
+            with st.container(border=True):
+                st.markdown("**Adaptive Practice & Quizzes**")
+                st.caption("Generate MCQs, short-answer questions, and timed exam simulation sessions.")
+            with st.container(border=True):
+                st.markdown("**Active Recall & Focus**")
+                st.caption("Master terminology using interactive flashcards and the built-in Pomodoro timer.")
+
+        st.markdown("---")
+        st.markdown("##### Quick Start")
+        st.markdown(
+            "1. **Upload your PDF** using the box above and click **Process & Index PDF**.<br>"
+            "2. **Navigate through tabs** below to Chat, read Summaries, review Notes, or generate Quizzes.<br>"
+            "3. **Track your retention** and focus time completely offline on your personal machine.",
+            unsafe_allow_html=True,
+        )
+    else:
+        with st.container(border=True):
+            st.caption("Upload Additional Course Material")
+            _render_upload_controls(store, is_dev)
 
 
 def _render_retrieval_testing_tab(store: FAISSVectorStore) -> None:
@@ -814,11 +1218,11 @@ def _render_summary_tab(store: FAISSVectorStore) -> None:
 
     if isinstance(provider, llm_provider.OllamaLLMProvider):
         st.caption(
-            f"🤖 Summaries powered by local **{provider.model_name}** via Ollama (`{provider.base_url}`)."
+            f"Summaries powered by local **{provider.model_name}** via Ollama (`{provider.base_url}`)."
         )
         ok_conn, conn_msg = provider.check_connection()
         if not ok_conn:
-            st.warning(f"⚠️ {conn_msg}")
+            st.warning(conn_msg)
             st.caption(
                 "PDF indexing and Vector Retrieval Testing continue working without Ollama. "
                 "Start Ollama with `ollama serve` to enable summaries."
@@ -826,7 +1230,7 @@ def _render_summary_tab(store: FAISSVectorStore) -> None:
         else:
             ok_model, model_msg = provider.check_model_available()
             if not ok_model:
-                st.warning(f"⚠️ {model_msg}")
+                st.warning(model_msg)
     else:
         if not provider.is_configured():
             st.warning(
@@ -1035,30 +1439,31 @@ def _render_summary_tab(store: FAISSVectorStore) -> None:
 
         if summary_data.get("match_notice"):
             if summary_data.get("status") == "partial":
-                st.warning(f"⚠️ {summary_data['match_notice']}")
+                st.warning(summary_data["match_notice"])
             else:
                 st.info(summary_data["match_notice"])
 
         st.markdown(summary_data["summary_text"])
 
-        with st.expander(
-            f"Source Chunks Referenced ({len(summary_data['source_chunks'])})",
-            expanded=False,
-        ):
-            for idx, chunk in enumerate(summary_data["source_chunks"], start=1):
-                meta = chunk["metadata"]
-                score_suffix = (
-                    f" | Similarity: {chunk['score']:.4f}"
-                    if chunk.get("score") is not None
-                    else ""
-                )
-                st.markdown(
-                    f"**{idx}. {meta['filename']} — Page {meta['page_range']}, "
-                    f"Chunk {meta['chunk_index']} (`{meta['chunk_id']}`){score_suffix}**"
-                )
-                st.write(chunk["text"])
-                if idx < len(summary_data["source_chunks"]):
-                    st.divider()
+        if _is_test_or_dev_mode():
+            with st.expander(
+                f"Source Chunks Referenced ({len(summary_data['source_chunks'])})",
+                expanded=False,
+            ):
+                for idx, chunk in enumerate(summary_data["source_chunks"], start=1):
+                    meta = chunk["metadata"]
+                    score_suffix = (
+                        f" | Similarity: {chunk['score']:.4f}"
+                        if chunk.get("score") is not None
+                        else ""
+                    )
+                    st.markdown(
+                        f"**{idx}. {meta['filename']} — Page {meta['page_range']}, "
+                        f"Chunk {meta['chunk_index']} (`{meta['chunk_id']}`){score_suffix}**"
+                    )
+                    st.write(chunk["text"])
+                    if idx < len(summary_data["source_chunks"]):
+                        st.divider()
 
 
 def _render_study_notes_tab(store: FAISSVectorStore) -> None:
@@ -1084,11 +1489,11 @@ def _render_study_notes_tab(store: FAISSVectorStore) -> None:
 
     if isinstance(provider, llm_provider.OllamaLLMProvider):
         st.caption(
-            f"🤖 Study Notes powered by local **{provider.model_name}** via Ollama (`{provider.base_url}`)."
+            f"Study Notes powered by local **{provider.model_name}** via Ollama (`{provider.base_url}`)."
         )
         ok_conn, conn_msg = provider.check_connection()
         if not ok_conn:
-            st.warning(f"⚠️ {conn_msg}")
+            st.warning(conn_msg)
             st.caption(
                 "PDF indexing and Vector Retrieval Testing continue working without Ollama. "
                 "Start Ollama with `ollama serve` to enable study notes."
@@ -1096,7 +1501,7 @@ def _render_study_notes_tab(store: FAISSVectorStore) -> None:
         else:
             ok_model, model_msg = provider.check_model_available()
             if not ok_model:
-                st.warning(f"⚠️ {model_msg}")
+                st.warning(model_msg)
     else:
         if not provider.is_configured():
             st.warning(
@@ -1200,7 +1605,7 @@ def _render_study_notes_tab(store: FAISSVectorStore) -> None:
     with col_regen:
         has_cached = selected_doc_id in st.session_state.get("cached_notes", {})
         regen_clicked = st.button(
-            "🔄 Regenerate Notes",
+            "Regenerate Notes",
             key="regenerate_notes_btn",
             disabled=not has_cached or page_range_invalid,
         )
@@ -1295,7 +1700,7 @@ def _render_study_notes_tab(store: FAISSVectorStore) -> None:
 
         if notes_data.get("status") == "partial":
             st.warning(
-                f"⚠️ Partial Study Notes: Only {notes_data.get('chunks_used', 0)} of "
+                f"Partial Study Notes: Only {notes_data.get('chunks_used', 0)} of "
                 f"{notes_data.get('total_eligible_chunks', 0)} chunks could be processed."
             )
 
@@ -1309,7 +1714,7 @@ def _render_study_notes_tab(store: FAISSVectorStore) -> None:
         md_content = export_notes_to_markdown(notes_data)
         clean_stem = re.sub(r"[^\w\-.]", "_", notes_data.get("filename", "document")).rstrip(".pdf")
         st.download_button(
-            label="📥 Download Notes (.md)",
+            label="Download Notes (.md)",
             data=md_content,
             file_name=f"study_notes_{clean_stem}.md",
             mime="text/markdown",
@@ -1318,25 +1723,26 @@ def _render_study_notes_tab(store: FAISSVectorStore) -> None:
 
         st.markdown(notes_data["notes_text"])
 
-        with st.expander(
-            f"Study Notes Source Chunks ({len(notes_data.get('source_chunks', []))})",
-            expanded=False,
-        ):
-            for idx, chunk in enumerate(notes_data.get("source_chunks", []), start=1):
-                meta = chunk.get("metadata", chunk)
-                p_label = meta.get("page_range", meta.get("page", "Unknown"))
-                score_suffix = (
-                    f" | Similarity: {chunk['score']:.4f}"
-                    if chunk.get("score") is not None
-                    else ""
-                )
-                st.markdown(
-                    f"**{idx}. {meta.get('filename', notes_data['filename'])} — Page {p_label}, "
-                    f"Chunk {meta.get('chunk_index', idx)} (`{meta.get('chunk_id', 'id')}`){score_suffix}**"
-                )
-                st.write(chunk.get("text", ""))
-                if idx < len(notes_data.get("source_chunks", [])):
-                    st.divider()
+        if _is_test_or_dev_mode():
+            with st.expander(
+                f"Study Notes Source Chunks ({len(notes_data.get('source_chunks', []))})",
+                expanded=False,
+            ):
+                for idx, chunk in enumerate(notes_data.get("source_chunks", []), start=1):
+                    meta = chunk.get("metadata", chunk)
+                    p_label = meta.get("page_range", meta.get("page", "Unknown"))
+                    score_suffix = (
+                        f" | Similarity: {chunk['score']:.4f}"
+                        if chunk.get("score") is not None
+                        else ""
+                    )
+                    st.markdown(
+                        f"**{idx}. {meta.get('filename', notes_data['filename'])} — Page {p_label}, "
+                        f"Chunk {meta.get('chunk_index', idx)} (`{meta.get('chunk_id', 'id')}`){score_suffix}**"
+                    )
+                    st.write(chunk.get("text", ""))
+                    if idx < len(notes_data.get("source_chunks", [])):
+                        st.divider()
 
 
 def _render_practice_questions_tab(store: FAISSVectorStore) -> None:
@@ -1362,11 +1768,11 @@ def _render_practice_questions_tab(store: FAISSVectorStore) -> None:
 
     if isinstance(provider, llm_provider.OllamaLLMProvider):
         st.caption(
-            f"🤖 Practice questions & quiz grading powered by local **{provider.model_name}** via Ollama (`{provider.base_url}`)."
+            f"Practice questions & quiz grading powered by local **{provider.model_name}** via Ollama (`{provider.base_url}`)."
         )
         ok_conn, conn_msg = provider.check_connection()
         if not ok_conn:
-            st.warning(f"⚠️ {conn_msg}")
+            st.warning(conn_msg)
             st.caption(
                 "PDF indexing and Vector Retrieval Testing continue working without Ollama. "
                 "Start Ollama with `ollama serve` to enable practice questions."
@@ -1374,7 +1780,7 @@ def _render_practice_questions_tab(store: FAISSVectorStore) -> None:
         else:
             ok_model, model_msg = provider.check_model_available()
             if not ok_model:
-                st.warning(f"⚠️ {model_msg}")
+                st.warning(model_msg)
     else:
         if not provider.is_configured():
             st.warning(
@@ -1681,24 +2087,25 @@ def _render_practice_questions_tab(store: FAISSVectorStore) -> None:
             option_letters=option_letters,
         )
 
-    with st.expander(
-        f"Source Chunks Referenced ({len(question_data['source_chunks'])})",
-        expanded=False,
-    ):
-        for idx, chunk in enumerate(question_data["source_chunks"], start=1):
-            meta = chunk["metadata"]
-            score_suffix = (
-                f" | Similarity: {chunk['score']:.4f}"
-                if chunk.get("score") is not None
-                else ""
-            )
-            st.markdown(
-                f"**{idx}. {meta['filename']} — Page {meta['page_range']}, "
-                f"Chunk {meta['chunk_index']} (`{meta['chunk_id']}`){score_suffix}**"
-            )
-            st.write(chunk["text"])
-            if idx < len(question_data["source_chunks"]):
-                st.divider()
+    if _is_test_or_dev_mode():
+        with st.expander(
+            f"Source Chunks Referenced ({len(question_data['source_chunks'])})",
+            expanded=False,
+        ):
+            for idx, chunk in enumerate(question_data["source_chunks"], start=1):
+                meta = chunk["metadata"]
+                score_suffix = (
+                    f" | Similarity: {chunk['score']:.4f}"
+                    if chunk.get("score") is not None
+                    else ""
+                )
+                st.markdown(
+                    f"**{idx}. {meta['filename']} — Page {meta['page_range']}, "
+                    f"Chunk {meta['chunk_index']} (`{meta['chunk_id']}`){score_suffix}**"
+                )
+                st.write(chunk["text"])
+                if idx < len(question_data["source_chunks"]):
+                    st.divider()
 
 
 def _execute_quiz_submission(
@@ -1818,15 +2225,15 @@ def _render_timed_quiz_live_timer(
         st.rerun()
 
     if timer.is_warning():
-        st.warning(f"⚠️ **Less than {timer.format_time()} remaining!** Finalize your answers.")
+        st.warning(f"**Less than {timer.format_time()} remaining!** Finalize your answers.")
 
     timer_color = "#e53e3e" if timer.is_warning() else "inherit"
     st.markdown(
-        f"<h2 style='text-align: center; margin: 0; padding: 0.25rem 0; color: {timer_color};'>⏱️ Time Remaining: {timer.format_time()}</h2>",
+        f"<h2 style='text-align: center; margin: 0; padding: 0.25rem 0; color: {timer_color};'>Time Remaining: {timer.format_time()}</h2>",
         unsafe_allow_html=True,
     )
     st.progress(timer.get_progress())
-    st.caption(f"⏱️ Timed Quiz in progress | Answered **{answered_count} / {total_count}** question(s)")
+    st.caption(f"Timed Quiz in progress | Answered **{answered_count} / {total_count}** question(s)")
 
 
 def _render_interactive_quiz_view(
@@ -2072,11 +2479,11 @@ def _render_interactive_quiz_view(
 
     st.divider()
     if quiz_session.get("auto_submitted"):
-        st.warning("⏱️ **Time Expired!** The quiz was automatically submitted when time ran out. Any unanswered questions were scored as 0.0.")
+        st.warning("**Time Expired!** The quiz was automatically submitted when time ran out. Any unanswered questions were scored as 0.0.")
     elif quiz_session.get("timed_mode"):
         timer_used = quiz_session.get("timer")
         el_mins = f"{timer_used.actual_elapsed_seconds / 60.0:.1f} mins" if timer_used else ""
-        st.success(f"🎉 **Timed Quiz Completed!** Submitted with time remaining ({el_mins}).")
+        st.success(f"**Timed Quiz Completed!** Submitted with time remaining ({el_mins}).")
 
     st.markdown(f"### Quiz Results — {eval_data['filename']}")
     grader_label = eval_data["short_answer_evaluator"].upper()
@@ -2175,11 +2582,11 @@ def _render_flashcard_tab(store: FAISSVectorStore) -> None:
 
     if isinstance(provider, llm_provider.OllamaLLMProvider):
         st.caption(
-            f"🤖 Flashcards powered by local **{provider.model_name}** via Ollama (`{provider.base_url}`)."
+            f"Flashcards powered by local **{provider.model_name}** via Ollama (`{provider.base_url}`)."
         )
         ok_conn, conn_msg = provider.check_connection()
         if not ok_conn:
-            st.warning(f"⚠️ {conn_msg}")
+            st.warning(conn_msg)
             st.caption(
                 "PDF indexing and Vector Retrieval Testing continue working without Ollama. "
                 "Start Ollama with `ollama serve` to enable flashcards."
@@ -2187,7 +2594,7 @@ def _render_flashcard_tab(store: FAISSVectorStore) -> None:
         else:
             ok_model, model_msg = provider.check_model_available()
             if not ok_model:
-                st.warning(f"⚠️ {model_msg}")
+                st.warning(model_msg)
     else:
         if not provider.is_configured():
             st.warning(
@@ -2290,7 +2697,7 @@ def _render_flashcard_tab(store: FAISSVectorStore) -> None:
     with col_regen:
         has_cached = selected_doc_id in st.session_state.get("cached_flashcards", {})
         regen_clicked = st.button(
-            "🔄 Regenerate Deck",
+            "Regenerate Deck",
             key="regenerate_flashcards_btn",
             disabled=not has_cached,
         )
@@ -2386,27 +2793,27 @@ def _render_flashcard_tab(store: FAISSVectorStore) -> None:
     with st.container(border=True):
         col_card_header, col_edit_toggle = st.columns([3, 1])
         with col_card_header:
-            edited_tag = " ✏️ *(Edited)*" if current_card.get("edited") else ""
+            edited_tag = " *(Edited)*" if current_card.get("edited") else ""
             st.caption(f"Card {current_idx + 1} of {len(cards)}{edited_tag}")
         with col_edit_toggle:
             show_editor = st.checkbox(
-                "✏️ Edit Card",
+                "Edit Card",
                 key=f"fc_show_editor_{selected_doc_id}_{current_idx}",
             )
 
         if not show_editor:
             if not flipped:
-                st.markdown("#### ❓ Front / Question")
+                st.markdown("#### Front (Question)")
                 st.markdown(f"### {current_card['front']}")
             else:
-                st.markdown("#### 💡 Back / Answer")
+                st.markdown("#### Back (Answer)")
                 st.markdown(f"**{current_card['back']}**")
                 st.caption(
                     f"Source: **{current_card['filename']}** | {current_card['page_range_label']} "
                     f"(Chunks: `{', '.join(current_card['source_chunk_ids'])}`)"
                 )
         else:
-            st.markdown("#### ✏️ Revise Flashcard")
+            st.markdown("#### Revise Flashcard")
             edited_front = st.text_input(
                 "Front / Question",
                 value=current_card["front"],
@@ -2433,30 +2840,30 @@ def _render_flashcard_tab(store: FAISSVectorStore) -> None:
 
     col_prev, col_flip, col_next = st.columns([1, 1, 1])
     with col_prev:
-        if st.button("⬅️ Previous Card", disabled=(current_idx == 0), key=f"fc_prev_{selected_doc_id}", use_container_width=True):
+        if st.button("Previous Card", disabled=(current_idx == 0), key=f"fc_prev_{selected_doc_id}", use_container_width=True):
             st.session_state[f"fc_idx_{selected_doc_id}"] = current_idx - 1
             st.session_state[f"fc_flipped_{selected_doc_id}"] = False
             st.rerun()
     with col_flip:
-        flip_label = "🔄 Show Front" if flipped else "🔄 Flip Card (Show Answer)"
+        flip_label = "Show Front" if flipped else "Flip Card (Show Answer)"
         if st.button(flip_label, type="secondary", key=f"fc_flip_{selected_doc_id}", use_container_width=True):
             st.session_state[f"fc_flipped_{selected_doc_id}"] = not flipped
             st.rerun()
     with col_next:
-        if st.button("Next Card ➡️", disabled=(current_idx >= len(cards) - 1), key=f"fc_next_{selected_doc_id}", use_container_width=True):
+        if st.button("Next Card", disabled=(current_idx >= len(cards) - 1), key=f"fc_next_{selected_doc_id}", use_container_width=True):
             st.session_state[f"fc_idx_{selected_doc_id}"] = current_idx + 1
             st.session_state[f"fc_flipped_{selected_doc_id}"] = False
             st.rerun()
 
     # Export controls
     st.divider()
-    st.markdown("#### 📥 Export Deck")
+    st.markdown("#### Export Deck")
     clean_stem = re.sub(r"[^\w\-.]", "_", fc_data["filename"]).replace(".pdf", "")
     col_dl_md, col_dl_csv = st.columns(2)
     with col_dl_md:
         md_content = export_flashcards_to_markdown(fc_data)
         st.download_button(
-            label="📥 Download Markdown (.md)",
+            label="Download Markdown (.md)",
             data=md_content,
             file_name=f"flashcards_{clean_stem}.md",
             mime="text/markdown",
@@ -2466,7 +2873,7 @@ def _render_flashcard_tab(store: FAISSVectorStore) -> None:
     with col_dl_csv:
         csv_content = export_flashcards_to_anki_csv(fc_data)
         st.download_button(
-            label="📥 Download Anki CSV (.csv)",
+            label="Download Anki CSV (.csv)",
             data=csv_content,
             file_name=f"flashcards_{clean_stem}_anki.csv",
             mime="text/csv",
@@ -2477,7 +2884,7 @@ def _render_flashcard_tab(store: FAISSVectorStore) -> None:
     with st.expander(f"View All {len(cards)} Flashcards as List"):
         for idx, card in enumerate(cards, start=1):
             with st.container(border=True):
-                edit_badge = " ✏️ *(Edited)*" if card.get("edited") else ""
+                edit_badge = " *(Edited)*" if card.get("edited") else ""
                 st.markdown(f"**Card #{idx}{edit_badge} — Front:** {card['front']}")
                 st.markdown(f"**Back:** {card['back']}")
                 st.caption(
@@ -2498,6 +2905,8 @@ def _render_pomodoro_live_display(timer: PomodoroTimer, stats_mgr: StudyStatisti
             session_in_cycle=timer.session_in_cycle,
         )
         timer.advance_to_next_session()
+        if st.session_state.get("pomo_sound_enabled", True):
+            st.session_state["pomo_play_chime"] = completed_type
         st.rerun()
 
     st.markdown(
@@ -2505,7 +2914,7 @@ def _render_pomodoro_live_display(timer: PomodoroTimer, stats_mgr: StudyStatisti
         unsafe_allow_html=True,
     )
     st.progress(timer.get_progress())
-    st.caption("⏳ Focus session in progress...")
+    st.caption("Focus session in progress...")
 
 
 def _render_pomodoro_static_display(timer: PomodoroTimer, stats_mgr: StudyStatisticsManager) -> None:
@@ -2516,9 +2925,9 @@ def _render_pomodoro_static_display(timer: PomodoroTimer, stats_mgr: StudyStatis
     )
     st.progress(timer.get_progress())
     if timer.state == PomodoroTimer.STATE_PAUSED:
-        st.caption("⏸️ Session is paused.")
+        st.caption("Session is paused.")
     elif timer.state == PomodoroTimer.STATE_COMPLETED:
-        st.caption("🎉 Session complete! Ready for next interval.")
+        st.caption("Session complete! Ready for next interval.")
     else:
         st.caption("Ready to begin. Press Start Focus.")
 
@@ -2529,24 +2938,28 @@ def _render_pomodoro_subtab(
     stats: dict[str, Any],
 ) -> None:
     """Render the complete Pomodoro Focus Timer view."""
+    if st.session_state.get("pomo_play_chime"):
+        chime_type = st.session_state.pop("pomo_play_chime")
+        _render_timer_audio_script(chime_type)
+
     # Metrics summary
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Completed Focus", stats["completed_focus_sessions"])
     m2.metric("Total Focus Time", f"{int(stats['total_focus_minutes'])} mins")
     m3.metric("Total Break Time", f"{int(stats['total_break_minutes'])} mins")
-    streak_label = f"{stats['current_streak']} 🔥" if stats["current_streak"] > 0 else "0 days"
+    streak_label = f"{stats['current_streak']} days" if stats["current_streak"] > 0 else "0 days"
     m4.metric("Day Streak", streak_label)
 
     st.divider()
 
     # Session type banner
     session_labels = {
-        PomodoroTimer.FOCUS: ("🎯 Focus Session", "Time to concentrate without distractions."),
-        PomodoroTimer.SHORT_BREAK: ("☕ Short Break", "Step away, stretch, and relax your eyes."),
-        PomodoroTimer.LONG_BREAK: ("🌴 Long Break", "Well done! Take a longer recharge break."),
+        PomodoroTimer.FOCUS: ("Focus Session", "Time to concentrate without distractions."),
+        PomodoroTimer.SHORT_BREAK: ("Short Break", "Step away, stretch, and relax your eyes."),
+        PomodoroTimer.LONG_BREAK: ("Long Break", "Well done! Take a longer recharge break."),
     }
     badge_title, badge_caption = session_labels.get(
-        timer.current_session_type, ("🎯 Focus Session", "")
+        timer.current_session_type, ("Focus Session", "")
     )
 
     col_info, col_cycle = st.columns([2, 1.2])
@@ -2571,67 +2984,73 @@ def _render_pomodoro_subtab(
         if timer.state == PomodoroTimer.STATE_IDLE:
             with col_ctrl1:
                 start_label = (
-                    "▶️ Start Focus"
+                    "Start Focus"
                     if timer.current_session_type == PomodoroTimer.FOCUS
-                    else "▶️ Start Break"
+                    else "Start Break"
                 )
                 if st.button(start_label, type="primary", key="pomo_start_btn", use_container_width=True):
                     timer.start()
                     st.rerun()
             with col_ctrl2:
-                if st.button("🔄 Reset", key="pomo_reset_btn", use_container_width=True):
+                if st.button("Reset", key="pomo_reset_btn", use_container_width=True):
                     timer.reset()
                     st.rerun()
             with col_ctrl3:
-                if st.button("⏭️ Skip Session", key="pomo_skip_btn", use_container_width=True):
+                if st.button("Skip Session", key="pomo_skip_btn", use_container_width=True):
                     timer.skip()
                     st.rerun()
 
         elif timer.state == PomodoroTimer.STATE_RUNNING:
             with col_ctrl1:
-                if st.button("⏸️ Pause", type="primary", key="pomo_pause_btn", use_container_width=True):
+                if st.button("Pause", type="primary", key="pomo_pause_btn", use_container_width=True):
                     timer.pause()
                     st.rerun()
             with col_ctrl2:
-                if st.button("🔄 Reset", key="pomo_reset_btn", use_container_width=True):
+                if st.button("Reset", key="pomo_reset_btn", use_container_width=True):
                     timer.reset()
                     st.rerun()
             with col_ctrl3:
-                if st.button("⏭️ Skip Session", key="pomo_skip_btn", use_container_width=True):
+                if st.button("Skip Session", key="pomo_skip_btn", use_container_width=True):
                     timer.skip()
                     st.rerun()
 
         elif timer.state == PomodoroTimer.STATE_PAUSED:
             with col_ctrl1:
-                if st.button("▶️ Resume", type="primary", key="pomo_resume_btn", use_container_width=True):
+                if st.button("Resume", type="primary", key="pomo_resume_btn", use_container_width=True):
                     timer.resume()
                     st.rerun()
             with col_ctrl2:
-                if st.button("🔄 Reset", key="pomo_reset_btn", use_container_width=True):
+                if st.button("Reset", key="pomo_reset_btn", use_container_width=True):
                     timer.reset()
                     st.rerun()
             with col_ctrl3:
-                if st.button("⏭️ Skip Session", key="pomo_skip_btn", use_container_width=True):
+                if st.button("Skip Session", key="pomo_skip_btn", use_container_width=True):
                     timer.skip()
                     st.rerun()
 
         elif timer.state == PomodoroTimer.STATE_COMPLETED:
             with col_ctrl1:
-                if st.button("▶️ Next Interval", type="primary", key="pomo_next_btn", use_container_width=True):
+                if st.button("Next Interval", type="primary", key="pomo_next_btn", use_container_width=True):
                     timer.advance_to_next_session()
                     st.rerun()
             with col_ctrl2:
-                if st.button("🔄 Reset", key="pomo_reset_btn", use_container_width=True):
+                if st.button("Reset", key="pomo_reset_btn", use_container_width=True):
                     timer.reset()
                     st.rerun()
             with col_ctrl3:
-                if st.button("⏭️ Skip", key="pomo_skip_btn", use_container_width=True):
+                if st.button("Skip", key="pomo_skip_btn", use_container_width=True):
                     timer.skip()
                     st.rerun()
 
     # Settings Container
     with st.container(border=True):
-        st.markdown("#### ⚙️ Customize Timer Durations")
+        st.markdown("#### Customize Timer Durations")
+        st.checkbox(
+            "Audio chime on session completion",
+            value=st.session_state.get("pomo_sound_enabled", True),
+            key="pomo_sound_enabled",
+            help="Plays a gentle acoustic chime when a focus interval or break concludes.",
+        )
         c1, c2, c3, c4 = st.columns(4)
         with c1:
             custom_focus = st.number_input(
@@ -2683,7 +3102,7 @@ def _render_pomodoro_subtab(
     # History Container
     history = stats.get("session_history", [])
     with st.container(border=True):
-        st.markdown(f"#### 📜 Session History ({len(history)})")
+        st.markdown(f"#### Session History ({len(history)})")
         if not history:
             st.caption("No completed study sessions recorded yet. Start a focus session above!")
         else:
@@ -2696,7 +3115,7 @@ def _render_pomodoro_subtab(
 
             col_res_btn, _ = st.columns([1, 2])
             with col_res_btn:
-                if st.button("🗑️ Reset All Statistics", key="pomo_reset_stats_btn"):
+                if st.button("Reset All Statistics", key="pomo_reset_stats_btn"):
                     stats_mgr.reset_statistics()
                     st.success("All statistics have been reset.")
                     st.rerun()
@@ -2712,6 +3131,8 @@ def _render_challenge_live_display(timer: ChallengeTimer, stats_mgr: StudyStatis
             planned_duration_seconds=timer.duration_seconds,
             actual_duration_seconds=actual_elapsed,
         )
+        if st.session_state.get("pomo_sound_enabled", True):
+            st.session_state["pomo_play_chime"] = "challenge"
         st.rerun()
 
     st.markdown(
@@ -2719,7 +3140,7 @@ def _render_challenge_live_display(timer: ChallengeTimer, stats_mgr: StudyStatis
         unsafe_allow_html=True,
     )
     st.progress(timer.get_progress())
-    st.caption("⏳ Challenge in progress! Stay focused on your objective.")
+    st.caption("Challenge in progress! Stay focused on your objective.")
 
 
 def _render_challenge_static_display(timer: ChallengeTimer) -> None:
@@ -2730,11 +3151,11 @@ def _render_challenge_static_display(timer: ChallengeTimer) -> None:
     )
     st.progress(timer.get_progress())
     if timer.state == ChallengeTimer.STATE_PAUSED:
-        st.caption("⏸️ Challenge is paused.")
+        st.caption("Challenge is paused.")
     elif timer.state == ChallengeTimer.STATE_COMPLETED:
-        st.caption("🏆 Challenge complete! Outstanding focus work!")
+        st.caption("Challenge complete! Outstanding focus work!")
     elif timer.state == ChallengeTimer.STATE_CANCELLED:
-        st.caption("🛑 Challenge was cancelled. Ready for another attempt.")
+        st.caption("Challenge was cancelled. Ready for another attempt.")
     else:
         st.caption("Ready to begin. Set your objective and duration, then press Start Challenge.")
 
@@ -2745,7 +3166,11 @@ def _render_challenge_subtab(
     stats: dict[str, Any],
 ) -> None:
     """Render the Countdown Study Challenge interface."""
-    st.markdown("### ⚡ Countdown Study Challenge")
+    if st.session_state.get("pomo_play_chime"):
+        chime_type = st.session_state.pop("pomo_play_chime")
+        _render_timer_audio_script(chime_type)
+
+    st.markdown("### Countdown Study Challenge")
     st.caption("Sprint through focused study blocks with custom challenge targets.")
 
     # Metrics row
@@ -2753,20 +3178,20 @@ def _render_challenge_subtab(
     m1.metric("Completed Challenges", stats.get("completed_challenges", 0))
     m2.metric("Total Challenge Time", f"{int(stats.get('total_challenge_minutes', 0))} mins")
     status_map = {
-        ChallengeTimer.STATE_RUNNING: "Running ⏳",
-        ChallengeTimer.STATE_PAUSED: "Paused ⏸️",
-        ChallengeTimer.STATE_COMPLETED: "Completed 🏆",
-        ChallengeTimer.STATE_CANCELLED: "Cancelled 🛑",
-        ChallengeTimer.STATE_IDLE: "Ready 🎯",
+        ChallengeTimer.STATE_RUNNING: "Running",
+        ChallengeTimer.STATE_PAUSED: "Paused",
+        ChallengeTimer.STATE_COMPLETED: "Completed",
+        ChallengeTimer.STATE_CANCELLED: "Cancelled",
+        ChallengeTimer.STATE_IDLE: "Ready",
     }
-    m3.metric("Challenge Status", status_map.get(timer.state, "Ready 🎯"))
+    m3.metric("Challenge Status", status_map.get(timer.state, "Ready"))
 
     st.divider()
 
     # Challenge Setup Container (Editable when idle, completed, or cancelled)
     is_active = timer.state in (ChallengeTimer.STATE_RUNNING, ChallengeTimer.STATE_PAUSED)
     with st.container(border=True):
-        st.markdown("#### 🎯 Setup Your Challenge")
+        st.markdown("#### Setup Your Challenge")
         col_t, col_d = st.columns([2, 1.2])
         with col_t:
             chal_title_input = st.text_input(
@@ -2804,7 +3229,7 @@ def _render_challenge_subtab(
     # Cancel confirmation banner if requested
     if st.session_state.get("chal_confirm_cancel"):
         with st.container(border=True):
-            st.warning("⚠️ Are you sure you want to cancel this challenge? Progress will not be recorded.")
+            st.warning("Are you sure you want to cancel this challenge? Progress will not be recorded.")
             col_yes, col_no = st.columns(2)
             with col_yes:
                 if st.button("Yes, Cancel Challenge", type="secondary", key="chal_confirm_cancel_btn", use_container_width=True):
@@ -2818,7 +3243,7 @@ def _render_challenge_subtab(
 
     # Active Countdown Container
     with st.container(border=True):
-        st.markdown(f"### ⚡ {timer.title}")
+        st.markdown(f"### {timer.title}")
 
         if timer.state == ChallengeTimer.STATE_RUNNING:
             _render_challenge_live_display(timer, stats_mgr)
@@ -2830,68 +3255,68 @@ def _render_challenge_subtab(
 
         if timer.state == ChallengeTimer.STATE_IDLE:
             with col_c1:
-                if st.button("🚀 Start Challenge", type="primary", key="chal_start_btn", use_container_width=True):
+                if st.button("Start Challenge", type="primary", key="chal_start_btn", use_container_width=True):
                     final_title = chal_title_input.strip() if chal_title_input.strip() else "Study Challenge"
                     timer.set_challenge(final_title, chosen_duration_mins)
                     timer.start()
                     st.rerun()
             with col_c2:
-                if st.button("🔄 Reset", key="chal_reset_btn", use_container_width=True):
+                if st.button("Reset", key="chal_reset_btn", use_container_width=True):
                     timer.reset()
                     st.rerun()
 
         elif timer.state == ChallengeTimer.STATE_RUNNING:
             with col_c1:
-                if st.button("⏸️ Pause", type="primary", key="chal_pause_btn", use_container_width=True):
+                if st.button("Pause", type="primary", key="chal_pause_btn", use_container_width=True):
                     timer.pause()
                     st.rerun()
             with col_c2:
-                if st.button("🔄 Reset", key="chal_reset_btn", use_container_width=True):
+                if st.button("Reset", key="chal_reset_btn", use_container_width=True):
                     timer.reset()
                     st.rerun()
             with col_c3:
-                if st.button("🛑 Cancel", key="chal_cancel_btn", use_container_width=True):
+                if st.button("Cancel", key="chal_cancel_btn", use_container_width=True):
                     st.session_state["chal_confirm_cancel"] = True
                     st.rerun()
 
         elif timer.state == ChallengeTimer.STATE_PAUSED:
             with col_c1:
-                if st.button("▶️ Resume", type="primary", key="chal_resume_btn", use_container_width=True):
+                if st.button("Resume", type="primary", key="chal_resume_btn", use_container_width=True):
                     timer.resume()
                     st.rerun()
             with col_c2:
-                if st.button("🔄 Reset", key="chal_reset_btn", use_container_width=True):
+                if st.button("Reset", key="chal_reset_btn", use_container_width=True):
                     timer.reset()
                     st.rerun()
             with col_c3:
-                if st.button("🛑 Cancel", key="chal_cancel_btn", use_container_width=True):
+                if st.button("Cancel", key="chal_cancel_btn", use_container_width=True):
                     st.session_state["chal_confirm_cancel"] = True
                     st.rerun()
 
         elif timer.state == ChallengeTimer.STATE_COMPLETED:
             with col_c1:
-                if st.button("✨ New Challenge", type="primary", key="chal_new_btn", use_container_width=True):
+                if st.button("New Challenge", type="primary", key="chal_new_btn", use_container_width=True):
                     timer.reset()
                     st.rerun()
             with col_c2:
-                if st.button("🔄 Reset", key="chal_reset_btn", use_container_width=True):
+                if st.button("Reset", key="chal_reset_btn", use_container_width=True):
                     timer.reset()
                     st.rerun()
 
         elif timer.state == ChallengeTimer.STATE_CANCELLED:
             with col_c1:
-                if st.button("🔄 Try Again", type="primary", key="chal_retry_btn", use_container_width=True):
+                if st.button("Try Again", type="primary", key="chal_retry_btn", use_container_width=True):
                     timer.start()
                     st.rerun()
             with col_c2:
-                if st.button("✨ New Challenge", key="chal_new_btn", use_container_width=True):
+                if st.button("New Challenge", key="chal_new_btn", use_container_width=True):
                     timer.reset()
                     st.rerun()
 
     # Challenge History Container
     chal_history = stats.get("challenge_history", [])
     with st.container(border=True):
-        st.markdown(f"#### 📜 Challenge History ({len(chal_history)})")
+        st.markdown(f"#### Challenge History ({len(chal_history)})")
         if not chal_history:
             st.caption("No completed challenges recorded yet. Launch a study challenge above!")
         else:
@@ -2901,7 +3326,7 @@ def _render_challenge_subtab(
                 planned_m = item.get("planned_duration_seconds", 0) // 60
                 completed_at = item.get("completed_at", "")[:19].replace("T", " ")
                 st.markdown(
-                    f"**⚡ {title_name}** — {mins:.1f} mins (Target: {planned_m} mins) | Completed at `{completed_at} UTC`"
+                    f"**{title_name}** — {mins:.1f} mins (Target: {planned_m} mins) | Completed at `{completed_at} UTC`"
                 )
 
 
@@ -2910,7 +3335,7 @@ def _render_timed_quiz_stats_subtab(
     stats: dict[str, Any],
 ) -> None:
     """Render performance metrics and history for timed quizzes."""
-    st.markdown("### 📝 Timed Quiz Performance")
+    st.markdown("### Timed Quiz Performance")
     st.caption("Review completed timed quiz attempts, scores, and time invested.")
 
     m1, m2, m3, m4 = st.columns(4)
@@ -2923,14 +3348,14 @@ def _render_timed_quiz_stats_subtab(
 
     history = stats.get("timed_quiz_history", [])
     with st.container(border=True):
-        st.markdown(f"#### 📜 Timed Quiz History ({len(history)})")
+        st.markdown(f"#### Timed Quiz History ({len(history)})")
         if not history:
             st.caption("No completed timed quizzes recorded yet. Take a timed quiz under Practice Questions!")
         else:
             for item in reversed(history[-10:]):
                 score_str = f"{item.get('earned_points', 0)}/{item.get('total_points', 0)} ({item.get('percentage', 0.0):.1f}%)"
                 mins = item.get("duration_minutes", 0.0)
-                sub_badge = "⏱️ Auto-submitted" if item.get("auto_submitted") else "✅ Submitted"
+                sub_badge = "Auto-submitted (Time Expired)" if item.get("auto_submitted") else "Submitted"
                 completed_at = item.get("completed_at", "")[:19].replace("T", " ")
                 st.markdown(
                     f"**{item.get('attempt_id', 'Quiz')}** — Score: **{score_str}** | Duration: {mins:.1f} mins | {sub_badge} | `{completed_at} UTC`"
@@ -2949,7 +3374,7 @@ def _render_study_timer_tab() -> None:
     stats = stats_mgr.to_dict()
 
     subtab_pomo, subtab_challenge, subtab_quiz = st.tabs(
-        ["🎯 Pomodoro Focus", "⚡ Study Challenges", "📝 Timed Quiz Stats"]
+        ["Pomodoro Focus", "Study Challenges", "Timed Quiz History"]
     )
 
     with subtab_pomo:
@@ -2977,7 +3402,7 @@ def _render_qa_tab(store: FAISSVectorStore) -> None:
             if isinstance(ollama_p, llm_provider.OllamaLLMProvider):
                 ok_conn, conn_msg = ollama_p.check_connection()
                 if not ok_conn:
-                    st.warning(f"⚠️ {conn_msg}")
+                    st.warning(conn_msg)
                     st.caption(
                         "PDF indexing and Vector Retrieval Testing continue working without Ollama. "
                         "Start Ollama with `ollama serve` to enable Q&A."
@@ -2985,7 +3410,7 @@ def _render_qa_tab(store: FAISSVectorStore) -> None:
                 else:
                     ok_model, model_msg = ollama_p.check_model_available()
                     if not ok_model:
-                        st.warning(f"⚠️ {model_msg}")
+                        st.warning(model_msg)
         except Exception as check_exc:
             logger.debug("Ollama availability check note: %s", check_exc)
     else:
@@ -3053,13 +3478,13 @@ def _render_qa_tab(store: FAISSVectorStore) -> None:
                         count=config.FOLLOW_UP_DEFAULT_COUNT,
                     )
                     if follow_ups:
-                        st.markdown("##### 💡 Suggested Follow-Up Questions")
+                        st.markdown("##### Suggested Follow-Up Questions")
                         for fq in follow_ups:
                             st.markdown(f"- {fq}")
                 except Exception as fu_err:
                     logger.debug("Follow-up question generation failed: %s", fu_err)
 
-                with st.expander("🔍 Deep Concept Explainer", expanded=False):
+                with st.expander("Deep Concept Explainer", expanded=False):
                     q_hash = abs(hash(question)) % 10000000
                     col_c1, col_c2 = st.columns([3, 1])
                     with col_c1:
@@ -3099,18 +3524,19 @@ def _render_qa_tab(store: FAISSVectorStore) -> None:
                                 except Exception as exp_err:
                                     st.error(f"Explanation failed: {exp_err}")
 
-            st.subheader("Source Chunks")
-            for index, chunk in enumerate(source_chunks, start=1):
-                metadata = chunk.get("metadata", {})
-                filename = metadata.get("filename", "Document")
-                page_range = metadata.get("page_range", metadata.get("page", "Unknown"))
-                chunk_index = metadata.get("chunk_index", index)
-                score = chunk.get("score")
-                score_str = f" | Similarity: {score:.3f}" if score is not None else ""
-                with st.expander(
-                    f"Source {index} — {filename} (Page {page_range}, Chunk {chunk_index}){score_str}"
-                ):
-                    st.write(chunk.get("text", ""))
+            if _is_test_or_dev_mode():
+                st.subheader("Source Chunks")
+                for index, chunk in enumerate(source_chunks, start=1):
+                    metadata = chunk.get("metadata", {})
+                    filename = metadata.get("filename", "Document")
+                    page_range = metadata.get("page_range", metadata.get("page", "Unknown"))
+                    chunk_index = metadata.get("chunk_index", index)
+                    score = chunk.get("score")
+                    score_str = f" | Similarity: {score:.3f}" if score is not None else ""
+                    with st.expander(
+                        f"Source {index} — {filename} (Page {page_range}, Chunk {chunk_index}){score_str}"
+                    ):
+                        st.write(chunk.get("text", ""))
 
 
 _render_groq_qa_tab = _render_qa_tab
@@ -3197,7 +3623,7 @@ def _render_chat_tab(store: FAISSVectorStore) -> None:
     # Action buttons: New, Rename, Delete, Export
     c_new, c_ren, c_del, c_exp, _ = st.columns([1, 1, 1, 1.5, 3])
     with c_new:
-        if st.button("➕ New Chat", key="chat_tab_new_chat_btn", use_container_width=True):
+        if st.button("New Chat", key="chat_tab_new_chat_btn", use_container_width=True):
             new_th = conv_mgr.create_thread(
                 document_id=selected_doc_id,
                 title=f"Chat {len(threads) + 1}",
@@ -3208,13 +3634,13 @@ def _render_chat_tab(store: FAISSVectorStore) -> None:
             st.rerun()
 
     with c_ren:
-        if st.button("✏️ Rename", key="chat_tab_rename_btn", use_container_width=True):
+        if st.button("Rename", key="chat_tab_rename_btn", use_container_width=True):
             st.session_state["chat_renaming_thread_id"] = active_thread.conversation_id
             st.session_state.pop("chat_pending_delete_thread_id", None)
             st.rerun()
 
     with c_del:
-        if st.button("🗑️ Delete", key="chat_tab_delete_btn", use_container_width=True):
+        if st.button("Delete", key="chat_tab_delete_btn", use_container_width=True):
             st.session_state["chat_pending_delete_thread_id"] = active_thread.conversation_id
             st.session_state.pop("chat_renaming_thread_id", None)
             st.rerun()
@@ -3226,7 +3652,7 @@ def _render_chat_tab(store: FAISSVectorStore) -> None:
             or "chat"
         )
         st.download_button(
-            "📥 Export Chat",
+            "Export Chat",
             data=md_content,
             file_name=f"{file_slug}_{active_thread.conversation_id[:8]}.md",
             mime="text/markdown",
@@ -3277,6 +3703,8 @@ def _render_chat_tab(store: FAISSVectorStore) -> None:
                 st.session_state.pop("chat_pending_delete_thread_id", None)
                 st.rerun()
 
+    is_dev = _is_test_or_dev_mode()
+
     # Ollama provider status check (non-blocking)
     if (config.LLM_PROVIDER or "").strip().lower() == "ollama":
         try:
@@ -3284,12 +3712,12 @@ def _render_chat_tab(store: FAISSVectorStore) -> None:
             if isinstance(ollama_p, llm_provider.OllamaLLMProvider):
                 ok_conn, conn_msg = ollama_p.check_connection()
                 if not ok_conn:
-                    st.warning(f"⚠️ {conn_msg}")
+                    st.warning(conn_msg)
                     st.caption("Start Ollama (`ollama serve`) to enable answers.")
                 else:
                     ok_model, model_msg = ollama_p.check_model_available()
                     if not ok_model:
-                        st.warning(f"⚠️ {model_msg}")
+                        st.warning(model_msg)
         except Exception as check_exc:
             logger.debug("Ollama check in chat tab note: %s", check_exc)
 
@@ -3303,12 +3731,17 @@ def _render_chat_tab(store: FAISSVectorStore) -> None:
     else:
         for msg in active_thread.messages:
             with st.chat_message(msg.role):
-                st.markdown(msg.content)
+                if msg.role == "assistant":
+                    clean_content = re.sub(r'\[Source \d+(?:,\s*Page \d+)?\]', '', msg.content).strip()
+                    st.markdown(clean_content)
+                else:
+                    st.markdown(msg.content)
+
                 if msg.role == "user" and msg.metadata.get("turn_status") == "failed":
                     st.error(
-                        f"⚠️ Generation failed: {msg.metadata.get('last_error', 'Generation error')}"
+                        f"Generation failed: {msg.metadata.get('last_error', 'Generation error')}"
                     )
-                    if st.button("🔄 Retry Question", key=f"retry_turn_{msg.message_id}"):
+                    if st.button("Retry Question", key=f"retry_turn_{msg.message_id}"):
                         st.session_state["chat_pending_retry_thread_id"] = (
                             active_thread.conversation_id
                         )
@@ -3322,9 +3755,9 @@ def _render_chat_tab(store: FAISSVectorStore) -> None:
                     valid_citations = [
                         c for c in citations if c.get("is_valid", True)
                     ]
-                    if valid_citations:
+                    if is_dev and valid_citations:
                         with st.expander(
-                            f"📚 Sources ({len(valid_citations)} cited)",
+                            f"Sources ({len(valid_citations)} cited)",
                             expanded=False,
                         ):
                             for c in valid_citations:
@@ -3333,13 +3766,13 @@ def _render_chat_tab(store: FAISSVectorStore) -> None:
                                 doc_name = c.get("filename", "")
                                 snippet = c.get("snippet", "")
                                 st.markdown(
-                                    f"**[Source {src_num}]** — Page {page} *(Document: {doc_name})*"
+                                    f"**Source {src_num}** — Page {page} *(Document: {doc_name})*"
                                 )
                                 if snippet:
                                     st.caption(f'"{snippet}"')
-                    if msg.metadata.get("is_rewritten") and msg.metadata.get("retrieval_query"):
+                    if is_dev and msg.metadata.get("is_rewritten") and msg.metadata.get("retrieval_query"):
                         with st.expander(
-                            "🔍 Conversational Query Rewrite", expanded=False
+                            "Conversational Query Rewrite", expanded=False
                         ):
                             st.caption(
                                 f"Retrieved evidence using rewritten query: **{msg.metadata.get('retrieval_query')}**"
@@ -3373,6 +3806,13 @@ def _render_chat_tab(store: FAISSVectorStore) -> None:
                 st.markdown(exec_query)
 
         with st.chat_message("assistant"):
+            placeholder = st.empty()
+            placeholder.markdown(
+                '<div class="typing-indicator" aria-label="Thinking">'
+                '<span></span><span></span><span></span>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
             try:
                 stream = orchestrator.stream_turn(
                     query=exec_query,
@@ -3381,7 +3821,7 @@ def _render_chat_tab(store: FAISSVectorStore) -> None:
                     is_retry=is_retry,
                     request_id=exec_req_id,
                 )
-                full_response = st.write_stream(stream)
+                full_response = placeholder.write_stream(stream)
                 last_res = orchestrator.last_result
                 if last_res and not last_res.success:
                     st.rerun()
@@ -3389,9 +3829,9 @@ def _render_chat_tab(store: FAISSVectorStore) -> None:
                     valid_citations = [
                         c for c in last_res.citations if c.get("is_valid", True)
                     ]
-                    if valid_citations:
+                    if is_dev and valid_citations:
                         with st.expander(
-                            f"📚 Sources ({len(valid_citations)} cited)",
+                            f"Sources ({len(valid_citations)} cited)",
                             expanded=False,
                         ):
                             for c in valid_citations:
@@ -3400,23 +3840,25 @@ def _render_chat_tab(store: FAISSVectorStore) -> None:
                                 doc_name = c.get("filename", "")
                                 snippet = c.get("snippet", "")
                                 st.markdown(
-                                    f"**[Source {src_num}]** — Page {page} *(Document: {doc_name})*"
+                                    f"**Source {src_num}** — Page {page} *(Document: {doc_name})*"
                                 )
                                 if snippet:
                                     st.caption(f'"{snippet}"')
-                    if last_res.is_rewritten and last_res.retrieval_query:
+                    if is_dev and last_res.is_rewritten and last_res.retrieval_query:
                         with st.expander(
-                            "🔍 Conversational Query Rewrite", expanded=False
+                            "Conversational Query Rewrite", expanded=False
                         ):
                             st.caption(
                                 f"Retrieved evidence using rewritten query: **{last_res.retrieval_query}**"
                             )
             except Exception as exc:
+                placeholder.empty()
                 logger.exception("Error executing chat stream turn")
                 st.error(f"Error during chat turn: {exc}")
 
 
 def main() -> None:
+    _inject_custom_css()
     st.title("PDF Chat - RAG Question Answering System")
 
     # 1. Single-Instance Application Lock Check
@@ -3426,7 +3868,7 @@ def main() -> None:
         holder_pid = lock_info.get("pid", "Unknown") if lock_info else "Unknown"
         started_at = lock_info.get("started_at", "Unknown") if lock_info else "Unknown"
         st.error(
-            "🚫 **StudyAstra Application Lock Conflict**\n\n"
+            "**StudyAstra Application Lock Conflict**\n\n"
             "Another StudyAstra process is already running against this data directory.\n\n"
             f"- **Active Process PID:** `{holder_pid}`\n"
             f"- **Process Started At:** `{started_at}`\n\n"
@@ -3462,7 +3904,7 @@ def main() -> None:
     if not is_valid:
         error_items = "\n".join(f"- {err}" for err in config_errors)
         st.error(
-            "❌ **Production Configuration Error**\n\n"
+            "**Production Configuration Error**\n\n"
             "The application cannot start because the environment configuration is invalid for production:\n\n"
             f"{error_items}\n\n"
             "Please run `python scripts/check_env.py` to diagnose and fix configuration issues."
@@ -3470,7 +3912,7 @@ def main() -> None:
         st.stop()
 
     for warning in config_warnings:
-        st.warning(f"⚠️ {warning}")
+        st.warning(f"Configuration Warning: {warning}")
 
     if st.session_state.get("last_action_notice"):
         st.success(st.session_state.pop("last_action_notice"))
@@ -3487,39 +3929,68 @@ def main() -> None:
     _render_upload_and_indexing(store)
     st.divider()
 
+    is_dev = _is_test_or_dev_mode()
     qa_tab_label = (
         f"Quick Q&A (Qwen2.5 7B)"
         if (config.LLM_PROVIDER or "").strip().lower() == "ollama"
         else "Quick Q&A (Groq)"
     )
-    tab_chat, tab_retrieval, tab_summary, tab_notes, tab_questions, tab_flashcards, tab_timer, tab_qa = st.tabs(
-        [
-            "Chat with PDF",
-            "Vector Retrieval Testing",
-            "PDF Summary",
-            "Study Notes",
-            "Practice Questions",
-            "Flashcards",
-            "Study Timer",
-            qa_tab_label,
-        ]
-    )
-    with tab_chat:
-        _render_chat_tab(store)
-    with tab_retrieval:
-        _render_retrieval_testing_tab(store)
-    with tab_summary:
-        _render_summary_tab(store)
-    with tab_notes:
-        _render_study_notes_tab(store)
-    with tab_questions:
-        _render_practice_questions_tab(store)
-    with tab_flashcards:
-        _render_flashcard_tab(store)
-    with tab_timer:
-        _render_study_timer_tab()
-    with tab_qa:
-        _render_qa_tab(store)
+
+    if is_dev:
+        tab_chat, tab_retrieval, tab_summary, tab_notes, tab_questions, tab_flashcards, tab_timer, tab_qa = st.tabs(
+            [
+                "Chat with PDF",
+                "Vector Retrieval Testing",
+                "PDF Summary",
+                "Study Notes",
+                "Practice Questions",
+                "Flashcards",
+                "Study Timer",
+                qa_tab_label,
+            ]
+        )
+        with tab_chat:
+            _render_chat_tab(store)
+        with tab_retrieval:
+            _render_retrieval_testing_tab(store)
+        with tab_summary:
+            _render_summary_tab(store)
+        with tab_notes:
+            _render_study_notes_tab(store)
+        with tab_questions:
+            _render_practice_questions_tab(store)
+        with tab_flashcards:
+            _render_flashcard_tab(store)
+        with tab_timer:
+            _render_study_timer_tab()
+        with tab_qa:
+            _render_qa_tab(store)
+    else:
+        tab_chat, tab_summary, tab_notes, tab_questions, tab_flashcards, tab_timer, tab_qa = st.tabs(
+            [
+                "Chat with PDF",
+                "PDF Summary",
+                "Study Notes",
+                "Practice Questions",
+                "Flashcards",
+                "Study Timer",
+                "Quick Q&A",
+            ]
+        )
+        with tab_chat:
+            _render_chat_tab(store)
+        with tab_summary:
+            _render_summary_tab(store)
+        with tab_notes:
+            _render_study_notes_tab(store)
+        with tab_questions:
+            _render_practice_questions_tab(store)
+        with tab_flashcards:
+            _render_flashcard_tab(store)
+        with tab_timer:
+            _render_study_timer_tab()
+        with tab_qa:
+            _render_qa_tab(store)
 
 
 main()

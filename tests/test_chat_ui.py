@@ -766,6 +766,38 @@ class TestStreamlitChatInterface(unittest.TestCase):
                 for expected_header in ["Chat with PDF", "PDF Summary", "Study Notes", "Practice Questions", "Flashcards", "Study Timer & Focus"]:
                     self.assertIn(expected_header, subheader_texts)
 
+    def test_17_typing_indicator_and_css_injection(self):
+        """Area 17: Typing indicator CSS is injected and write_stream completes cleanly."""
+        fake_model = _FakeUIEmbedder()
+        chunks = ["Answer ", "with ", "typing ", "indicator."]
+        fake_llm = _FakeStreamingLLMProvider(
+            answer="Answer with typing indicator.",
+            stream_chunks=chunks,
+        )
+        pdf_bio = _make_pdf(["Sample text."], name="sample.pdf")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store_dir = Path(tmpdir) / "vector_store"
+            _index_pdf_in_store(store_dir, fake_model, pdf_bio)
+
+            with (
+                patch.object(config, "VECTOR_STORE_DIR", store_dir),
+                patch("src.retrieval.embeddings.load_embedding_model", return_value=fake_model),
+                patch("src.generation.llm_provider.get_llm_provider", return_value=fake_llm),
+                patch("src.chat.chat_orchestrator.get_llm_provider", return_value=fake_llm),
+            ):
+                at = AppTest.from_file(APP_PATH).run()
+                self.assertFalse(at.exception)
+
+                # Verify typing indicator CSS exists in injected styles
+                css_markdown = [m.value for m in at.markdown if "typing-indicator" in m.value]
+                self.assertTrue(len(css_markdown) >= 1)
+
+                # Submit question
+                at.chat_input[0].set_value("Test indicator question").run()
+                self.assertFalse(at.exception)
+                self.assertEqual(fake_llm.stream_calls, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
