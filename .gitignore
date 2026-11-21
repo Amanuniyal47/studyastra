@@ -73,3 +73,16 @@ desktop.ini
 *.log
 scratch/
 tmp/
+
+# Application instance runtime locks
+.app.lock
+.app.lock.info
+*.lock
+
+# Streamlit runtime configuration and secrets
+.streamlit/secrets.toml
+
+# Hugging Face and model weight caches
+.cache/
+huggingface/
+models/

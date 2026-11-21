@@ -1,244 +1,300 @@
-# Study Bot — AI PDF Knowledge Base, Retrieval, Summarization & Practice Questions
+# StudyAstra — AI-Powered Python Study Assistant
 
-Study Bot is a Python and Streamlit application for uploading PDF study materials, extracting text, chunking content with page metadata, generating local dense embeddings, storing them in a persistent multi-PDF FAISS vector database, testing semantic retrieval, generating grounded single-PDF summaries, and generating chunk-grounded practice questions.
+StudyAstra is a local-first, AI-powered study companion and academic knowledge assistant built with Python and Streamlit. It allows students and researchers to ingest PDF textbooks and lecture slides, extract structured text, generate local vector embeddings, perform semantic similarity retrieval, and interact with their study materials through multi-turn conversational chat, automated summaries, practice questions, interactive quizzes, academic study notes, and flashcards.
 
----
-
-## 1. Currently Implemented Features
-
-* **PDF Upload & In-Memory Text Extraction:** Extracts page-by-page text from uploaded PDFs via PyMuPDF (`pymupdf`) without leaving temporary files on disk.
-* **Paragraph- & Sentence-Aware Chunking:** Splits extracted text into token-budgeted chunks (default `220` tokens, `40`-token overlap) while preserving paragraph boundaries, sentence boundaries, exact page attribution, unique `chunk_id`s, and deduplicating identical chunks within a document.
-* **Local Embedding Service (LLM-Independent):** Generates L2-normalized `384`-dimensional `float32` embeddings locally using `SentenceTransformer("all-MiniLM-L6-v2")` with batch processing and single-load Streamlit caching.
-* **Persistent Multi-PDF FAISS Vector Database:** Stores vectors in `faiss.IndexIDMap2(faiss.IndexFlatIP(384))` with monotonically increasing `int64` vector IDs (never reused after deletion) and generation-based transactional persistence under `data/vector_store/`.
-* **Document Management & Safe Deletion:** Tracks indexed PDFs by SHA-256 content hash (`document_id`), prevents duplicate indexing before embedding, supports incremental multi-PDF indexing, and supports isolated per-document deletion with confirmation.
-* **Vector Retrieval Testing Tab (LLM-Independent):** Query FAISS across all documents or filtered to a single PDF, adjust `Top K`, and inspect ranked chunks with document filename, page number, `chunk_id`, cosine similarity score, and chunk text—works even without `GROQ_API_KEY`.
-* **PDF Summary Tab (Stage 6.1):**
-  * Strictly single-PDF summarization across **Full Document**, **Page Range** (actual indexed pages), **Section** (exact heading match vs. transparent semantic fallback), and **Topic** (single-PDF FAISS retrieval).
-  * **Short**, **Medium**, and **Detailed** lengths with prompt-aware hierarchical map-reduce (`SUMMARY_MAX_BATCH_TOKENS=2400`, bounded `MAX_REDUCTION_LEVELS=3`), live progress updates, verified source page metadata, and session-only caching invalidated on delete/reset.
-* **Practice Questions & Interactive Quiz Tab (Stages 6.2 & 6.3):**
-  * Strictly single-PDF practice question generation across **Full Document**, **Page Range** (using actual indexed page numbers), and **Topic** (using document-scoped FAISS retrieval with configurable `Top K`).
-  * Four question types: **MCQ** (4 distinct options, unambiguous single correct answer, explanation), **Short Answer** (expected answer + explanation), **True / False** (`True`/`False` + grounded `correct_statement` + explanation), and **Mixed** (balanced distribution across all three types, e.g., `10 -> 4 MCQ, 3 Short Answer, 3 True/False`, displaying actual distribution).
-  * Three difficulty levels: **Easy**, **Medium**, and **Hard**, with configurable question count (`1..QUESTION_MAX_COUNT`).
-  * **Strict Source-Chunk Grounding:** Every question must cite valid `source_chunk_ids` from the selected document and batch; unknown or cross-document chunk IDs are rejected, and `source_pages`, `filename`, and `document_id` are derived deterministically from verified vector-store chunks (never trusting LLM-generated page guesses).
-  * **Batch Generation, Token Budgets, Retries & Shortfall Handling:** Full prompt token budgeting (`QUESTION_MAX_BATCH_TOKENS=2400`, including system/user prompts, schema, headers, source text, and bounded previous-stem context), bounded output-token allowance (`QUESTION_MAX_OUTPUT_TOKENS=1400`), evenly spaced multi-batch coverage for large PDFs, duplicate filtering, bounded retries (`QUESTION_MAX_RETRIES=1`), bounded top-up (max 1 call), and graceful shortfall warnings (returning only valid unique questions without inventing facts or exceeding requested count).
-  * **Two Practice Modes:**
-    * **Study View:** Immediate question display with collapsible **Show Answers & Explanations** toggle (zero LLM calls on toggle or rerun) and Markdown export.
-    * **Interactive Quiz (Stage 6.3):** Answers, explanations, and scores remain strictly hidden until submission. Provides interactive inputs (`st.radio` for MCQ/TF, `st.text_area` for Short Answer), candidate progress counts, and explicit submission.
-  * **Discrete Scoring & Dual Evaluator Engine (Stage 6.3):**
-    * Discrete scoring: exactly `0.0`, `0.5`, or `1.0` points per question (1.0 point max). Unanswered questions score `0.0`.
-    * Deterministic evaluation for MCQ and True/False.
-    * Configurable Short Answer evaluation (`QUIZ_SHORT_ANSWER_EVALUATOR`): either **LLM** (single batched call strictly grounded in retrieved source chunks) or **Deterministic** (local token-overlap and negation-aware scoring with zero LLM calls).
-    * Summary metrics: Total score, percentage, breakdown by question type (MCQ, Short Answer, True/False), detailed per-question feedback, and an expandable review panel highlighting missed pages with verified source citations.
-  * **Robust State Management:** Streamlit reruns preserve answers; grading failures preserve typed responses so users can resubmit without re-typing; clicking **Retry Quiz** clears prior answers and results while reusing the exact cached question set with **zero LLM generation calls**; switching documents isolates quiz states; deleting a document or resetting the vector store immediately clears all quiz sessions and widget keys.
-* **Reusable LLM Provider Abstraction:** `BaseLLMProvider`, `GroqLLMProvider`, and provider registry/factory (`get_llm_provider`, `register_llm_provider`) keeping ingestion, embeddings, and FAISS strictly decoupled from LLMs.
-* **Quick Q&A (Groq) Tab:** Preserved single-turn grounded Q&A using the shared provider abstraction.
+The system is designed with a **privacy-first, offline-capable architecture**: all vector embeddings and search indexes run locally on the user's computer via Sentence Transformers and FAISS, while language generation is powered by a local **Ollama** instance running **Qwen2.5 7B**. Zero cloud API keys or external subscription services are required.
 
 ---
 
-## 2. Architecture & Folder Structure
+## 1. Features
 
-```text
-Study Bot/
-├── app.py                              # Streamlit UI: KB sidebar, Upload/Index, Retrieval Testing, PDF Summary, Practice Questions, Quick Q&A
-├── requirements.txt                    # Verified Python dependencies (7/7 exact match)
-├── .env.example                        # Template environment variables
-├── README.md                           # Project documentation
-├── data/
-│   └── vector_store/                   # Created automatically on first index commit
-│       ├── manifest.json               # Atomic pointer to the active committed generation
-│       └── generations/
-│           └── gen_<N>/
-│               ├── index.faiss         # FAISS IndexIDMap2(IndexFlatIP) binary index
-│               ├── metadata.json       # Chunk text & metadata keyed by vector_id
-│               └── documents.json      # Document registry & per-document vector_id ownership
-├── src/
-│   ├── config.py                       # Centralized env & hyperparameter configuration
-│   ├── utils/
-│   │   └── file_utils.py               # SHA-256 file hashing for document deduplication
-│   ├── ingestion/
-│   │   ├── pdf_loader.py               # PyMuPDF in-memory page-by-page PDF text extraction
-│   │   └── chunker.py                  # Paragraph/sentence-aware token-budget chunker
-│   ├── retrieval/
-│   │   ├── embeddings.py               # Local SentenceTransformer EmbeddingService (LLM-independent)
-│   │   ├── vector_store.py             # Persistent transactional FAISSVectorStore + read-only doc chunk getters
-│   │   └── retriever.py                # High-level query embedding & FAISS similarity search
-│   ├── database/
-│   │   └── document_manager.py         # Document registry & per-document vector ownership validation
-│   └── generation/
-│       ├── llm_provider.py             # BaseLLMProvider, GroqLLMProvider, provider registry & factory
-│       ├── prompts.py                  # Grounded Q&A prompt templates
-│       ├── answer_generator.py         # Single-turn Q&A using LLM provider abstraction
-│       ├── summary_prompts.py          # Grounded single-pass, map-batch & reduce summary prompts
-│       ├── summarizer.py               # Hierarchical single-PDF summarizer (full, page_range, section, topic)
-│       ├── question_validation.py      # PracticeQuestion/QuestionSetResult, JSON parsing, chunk grounding, dedup
-│       ├── question_prompts.py         # Difficulty rubrics, JSON schemas & bounded previous-stem prompts
-│       ├── question_generator.py       # Batch practice-question orchestrator (full, page_range, topic, mixed)
-│       └── quiz_evaluator.py           # Stage 6.3 quiz scoring engine (deterministic MCQ/TF, batched LLM short answer)
-└── tests/
-    ├── test_chunker.py                 # Stage 1 config & chunker unit tests
-    ├── test_embeddings.py              # Stage 2 mocked embedding tests + opt-in real-model smoke test
-    ├── test_vector_store.py            # Stage 3 persistence, restart, deletion, rollback, corruption tests
-    ├── test_llm_provider.py            # Stage 6.1a provider factory, Groq error handling & extensibility tests
-    ├── test_summarizer.py              # Stage 6.1b modes, lengths, prompt-aware hierarchical budget & isolation tests
-    ├── test_question_validation.py     # Stage 6.2a config, mixed allocation, JSON parsing, chunk grounding & dedup
-    ├── test_question_generator.py      # Stage 6.2b batch orchestration, token budget, shortfall, retry & isolation
-    ├── test_quiz_evaluator.py          # Stage 6.3a quiz scoring, deterministic safeguards & batched LLM grading tests
-    ├── test_pipeline.py                # Core pipeline & Q&A unit tests
-    └── test_app_ui.py                  # Stages 4, 6.1c, 6.2c & 6.3b Streamlit AppTest end-to-end UI tests
+StudyAstra provides a unified study interface organized into eight dedicated modules:
+
+- **PDF Ingestion & Text Extraction:** Page-by-page text extraction from uploaded PDF documents using PyMuPDF (`pymupdf`) with layout-aware column sorting, boundary preservation, and SHA-256 deduplication.
+- **Conversational PDF Chatbot (RAG):** Multi-turn conversational study assistant grounded strictly in document context, featuring sliding-window conversation memory, conversational query rewriting, and verifiable source citations with page attribution.
+- **PDF Summarization:** Single-PDF summarization across Full Document, Page Range, Section, or Topic with prompt-aware hierarchical map-reduce and configurable length (Short, Medium, Detailed).
+- **Practice Question Generation:** Generates grounded practice questions across four types: Multiple Choice (MCQ), Short Answer, True/False, and Mixed distributions, with Easy, Medium, and Hard difficulty levels.
+- **Interactive Quiz & Evaluation Engine:** Interactive testing environment with hidden answers during attempts, deterministic grading for MCQ/TF, batched semantic grading for short answers, and detailed review of missed pages.
+- **Academic Study Notes:** Generates structured, high-yield study notes with executive summaries, core technical definitions, mechanisms, and key exam takeaways.
+- **Flashcard Deck Generator & Flip Viewer:** Interactive flippable study flashcards with Anki CSV and Markdown export options.
+- **Vector Retrieval Testing:** Direct semantic similarity inspection tool that queries the FAISS vector index across all documents or filtered to a single PDF without calling any LLM.
+- **Study Timers & Challenges:** Built-in Pomodoro study timer, countdown challenge timers, and timed quiz sessions to support disciplined study habits.
+
+---
+
+## 2. Technology Stack
+
+| Technology | Role in StudyAstra |
+| :--- | :--- |
+| **Python** (3.11+ / 3.14) | Core programming language for application logic, pipeline, and tests |
+| **Streamlit** (v1.42+) | Reactive web user interface, session state management, and token streaming |
+| **Ollama** | Local LLM inference server managing the Qwen2.5 7B model |
+| **Qwen2.5 7B** (`qwen2.5:7b`) | Primary local language model for grounded chat, summaries, notes, and quizzes |
+| **Sentence Transformers** | Local dense semantic embedding generation using `all-MiniLM-L6-v2` |
+| **FAISS** (`faiss-cpu`) | High-performance vector index (`IndexIDMap2` wrapping `IndexFlatIP`) |
+| **PyMuPDF** (`pymupdf`) | Fast, in-memory PDF text extraction and layout sorting |
+| **PyTorch** (`torch` CPU) | Tensor computation backend for local embedding generation |
+| **HTTPX** | Resilient asynchronous and synchronous HTTP client for Ollama communication |
+
+---
+
+## 3. Architecture Overview
+
+StudyAstra decouples document ingestion, embedding generation, and vector retrieval from the language model backend.
+
+```mermaid
+flowchart TD
+    subgraph Ingestion ["1. Document Ingestion Pipeline"]
+        PDF["PDF Upload"] --> Extractor["PyMuPDF Text Extractor"]
+        Extractor --> Chunker["Token-Aware Chunker (220 tokens, 40 overlap)"]
+    end
+
+    subgraph Embedding ["2. Embedding & Persistence"]
+        Chunker --> Embedder["SentenceTransformer (all-MiniLM-L6-v2)"]
+        Embedder --> FAISS["FAISS IndexIDMap2 (IndexFlatIP, 384-dim)"]
+        FAISS --> Storage[("Transactional Storage: data/vector_store/")]
+    end
+
+    subgraph Retrieval ["3. Semantic Retrieval"]
+        UserQuery["User Query / Chat / Topic"] --> QueryEmbed["Query Embedding"]
+        QueryEmbed --> Retriever["Retriever (Top-K Similarity Search)"]
+        Storage --> Retriever
+    end
+
+    subgraph Generation ["4. Local Generation Engine"]
+        Retriever --> ContextBuilder["Context & Prompt Builder"]
+        ContextBuilder --> Ollama["Ollama Client (HTTPX)"]
+        Ollama --> Qwen["Qwen2.5 7B (Local LLM)"]
+        Qwen --> UI["Streamlit Interface (Streaming Output)"]
+    end
 ```
 
----
-
-## 3. Data Flow & Key Design Choices
-
-```text
-PDF Upload (app.py)
-  │
-  ├─► file_hash()              SHA-256 content hash -> unique document_id
-  ├─► DocumentManager          Duplicate check BEFORE extraction or embedding
-  ├─► extract_pdf_text()       PyMuPDF -> [(page_number, page_text), ...]
-  ├─► chunk_text()             Paragraph-first, sentence-aware, 220/40 tokens
-  ├─► EmbeddingService         all-MiniLM-L6-v2 -> L2-normalized float32 (N, 384)
-  └─► FAISSVectorStore         IndexIDMap2(IndexFlatIP) + monotonic int64 vector_ids
-                               Transactional commit: gen_<N>/{index,metadata,documents} -> atomic manifest.json
-
-Vector Retrieval Testing (LLM-Independent)
-  └─► preprocess_text -> EmbeddingService.embed_query -> FAISSVectorStore.search (optional document_id)
-
-PDF Summary & Practice Questions (Strictly Single-PDF, Session-Cached, Never Indexed in FAISS)
-  ├─► Full / Page Range / Exact Section -> store.get_document_chunks(document_id, ...)
-  ├─► Topic / Semantic Section Fallback -> retrieve_chunks(..., document_id=document_id)
-  ├─► Summarizer                        -> Prompt-aware bounded hierarchical map-reduce
-  ├─► Question Generator                -> Evenly spaced token-budgeted batches -> JSON parse ->
-  │                                        strict source_chunk_ids verification -> deterministic page derivation ->
-  │                                        deduplication -> bounded top-up / shortfall notice
-  └─► Quiz Evaluator (Stage 6.3)        -> MCQ / True-False (deterministic) + Short Answer (batched LLM or deterministic)
-                                           -> discrete scoring (0.0/0.5/1.0) -> breakdown & missed page review
-```
-
-* **`all-MiniLM-L6-v2` + `220/40` Token Chunking:** CPU-friendly `384`-dim embeddings with default chunk sizes below the model's `256`-token sequence limit.
-* **`IndexIDMap2(IndexFlatIP)` + Transactional Generations:** Exact cosine similarity on L2-normalized vectors, stable non-reused `int64` vector IDs for isolated per-document deletion, and atomic `manifest.json` swaps.
-* **Chunk-ID Grounding for Practice Questions:** Rather than trusting LLM-reported page numbers, every question must cite exact `source_chunk_ids` from the batch. `question_validation.py` verifies ownership against the selected `document_id`, rejects unknown/cross-document IDs, and derives `source_pages`, `filename`, and `document_id` deterministically from the vector store.
-* **Grounded Quiz Scoring & Resubmission Safeguards:** Short-answer questions evaluated by LLM are strictly bounded to retrieved chunks of the cited document; MCQ/True-False grading is completely deterministic. Unanswered questions receive 0.0 points. If an API call fails during submission, user-typed answers remain intact in session state so submission can be retried immediately. Retrying a quiz increments the attempt counter and clears prior answers while reusing the exact cached questions with zero generation calls.
+### Core Architecture Principles
+1. **Strict Context Adherence:** Generation prompts instruct the model to answer exclusively from the retrieved document context. When information is missing, the model explicitly declines rather than hallucinating.
+2. **Deterministic Source Attribution:** Source chunk IDs and page numbers are derived deterministically from the FAISS metadata store—never from LLM guesses.
+3. **Transactional Storage:** Vector store mutations use generation-based transactional manifests (`manifest.json`) with safe atomic replacement, preventing index corruption.
+4. **Single-Instance Safety:** An OS-level kernel byte lock (`.app.lock`) ensures only one StudyAstra process accesses the vector database at a time.
 
 ---
 
-## 4. LLM Architecture: Current Groq & Future Local LLM Readiness
+## 4. Prerequisites
 
-* **Current Provider:** `GroqLLMProvider` (default `GROQ_MODEL=openai/gpt-oss-120b`) powers the **PDF Summary**, **Practice Questions**, and **Quick Q&A (Groq)** tabs.
-* **Strict Separation:** `src/ingestion/`, `src/retrieval/`, and `src/database/` have **zero imports or dependencies on Groq**. Uploading, chunking, embedding, persisting, deleting, and searching PDFs work without `GROQ_API_KEY`.
-* **Future Ollama / Qwen Readiness (Not Implemented Yet):** `src/generation/llm_provider.py` provides `BaseLLMProvider` and `register_llm_provider()`. Adding an Ollama/Qwen provider in a future phase will not require rewriting chunking, embeddings, FAISS, summarization, question generation, or the Streamlit UI. Requesting `LLM_PROVIDER=ollama` currently raises a clear configuration error.
+Before installing StudyAstra, ensure your system meets the following requirements:
+
+- **Operating System:** Windows 10/11 (64-bit), macOS, or Linux.
+- **Python Version:** Python 3.11, 3.12, 3.13, or 3.14 (64-bit strictly required for PyTorch and FAISS).
+- **RAM:** Minimum 8 GB (16 GB recommended for running Ollama Qwen2.5 7B alongside Streamlit).
+- **GPU (Optional):** NVIDIA GPU with 6+ GB VRAM for accelerated LLM inference; CPU inference is also supported via Ollama layer offloading.
+- **Ollama:** Installed and running locally.
 
 ---
 
-## 5. Installation & Setup
+## 5. Installation and Setup
 
-### Prerequisites
-* Python 3.11+ (verified on Python 3.13.15)
-
-### Virtual Environment & Dependencies
+### 1. Clone the Repository
 ```bash
+git clone https://github.com/Amanuniyal47/studyastra.git
+cd studyastra
+```
+
+### 2. Create and Activate a Virtual Environment
+
+**On Windows (PowerShell):**
+```powershell
 python -m venv venv
+.\venv\Scripts\activate
+```
+
+**On Linux / macOS:**
+```bash
+python3 -m venv venv
 source venv/bin/activate
+```
+
+### 3. Install Dependencies
+
+For Windows CPU installations, install the CPU-optimized PyTorch wheel first, then install the remaining requirements:
+
+```powershell
+# Step A: Install PyTorch CPU wheel
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+# Step B: Install project dependencies
 pip install -r requirements.txt
 ```
 
-Verified dependencies in `requirements.txt` (exact 7/7 match with third-party imports in `app.py` and `src/`):
-* `streamlit` — Web UI, session state, resource caching
-* `PyMuPDF` (`pymupdf`) — In-memory PDF text extraction
-* `faiss-cpu` — Local FAISS vector index
-* `sentence-transformers` — Local `all-MiniLM-L6-v2` embeddings
-* `numpy` — Contiguous `float32` vector arrays
-* `python-dotenv` — `.env` configuration loader
-* `groq` — Hosted LLM client for `GroqLLMProvider`
+*(On Linux / macOS or systems with CUDA, running `pip install -r requirements.txt` directly will install PyTorch from PyPI).*
 
 ---
 
-## 6. Environment Configuration
+## 6. Local Ollama & Model Setup
 
-Copy `.env.example` to `.env` and adjust as needed:
+StudyAstra uses Ollama to manage and serve the local **Qwen2.5 7B** language model.
 
+### 1. Install Ollama
+Download and install Ollama from [ollama.com/download](https://ollama.com/download).
+
+### 2. Start the Ollama Service
+Ensure Ollama is running in the background:
+```bash
+ollama serve
+```
+
+### 3. Download the Qwen2.5 7B Model
+Download the required model weights (approximately 4.7 GB):
+```bash
+ollama pull qwen2.5:7b
+```
+
+### 4. Verify Model Availability
+```bash
+ollama list
+```
+Confirm that `qwen2.5:7b` appears in the list of installed models.
+
+---
+
+## 7. Configuration
+
+Copy the example environment file to create your local `.env`:
+
+**On Windows (PowerShell):**
+```powershell
+Copy-Item .env.example .env
+```
+
+**On Linux / macOS:**
 ```bash
 cp .env.example .env
 ```
 
-| Variable | Default | Description |
-|---|---|---|
-| `EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | SentenceTransformers model name (validated against `manifest.json`) |
-| `EMBEDDING_BATCH_SIZE` | `32` | Batch size for chunk embedding |
-| `CHUNK_SIZE_TOKENS` | `220` | Target max tokens per chunk |
-| `CHUNK_OVERLAP_TOKENS` | `40` | Token overlap between adjacent chunks on the same page |
-| `TOP_K` | `3` | Default number of retrieved chunks |
-| `VECTOR_STORE_DIR` | `data/vector_store` | Local directory for persisted FAISS generations & manifest |
-| `LLM_PROVIDER` | `groq` | Active LLM provider (`groq`; `ollama` planned for a future phase) |
-| `LLM_TIMEOUT_SECONDS` | `60` | LLM request timeout in seconds |
-| `GROQ_API_KEY` | *(none)* | Required for **PDF Summary**, **Practice Questions**, and **Quick Q&A**; optional for indexing & retrieval |
-| `GROQ_MODEL` | `openai/gpt-oss-120b` | Active Groq chat completion model |
-| `SUMMARY_MAX_BATCH_TOKENS` | `2400` | Max input tokens per summary LLM call (includes prompts, headers & text) |
-| `SUMMARY_TOPIC_TOP_K` | `6` | Default retrieved chunks for Topic / Section fallback summaries |
-| `QUESTION_MAX_BATCH_TOKENS` | `2400` | Max input tokens per question-generation LLM call (includes prompts, schema, headers, text & previous stems) |
-| `QUESTION_DEFAULT_COUNT` | `5` | Default number of practice questions |
-| `QUESTION_MAX_COUNT` | `20` | Maximum allowed questions per generation request |
-| `QUESTION_TOPIC_TOP_K` | `6` | Default retrieved chunks for Topic-scoped practice questions |
-| `QUESTION_MAX_RETRIES` | `1` | Max retries per batch on malformed JSON or zero valid questions |
-| `QUESTION_MAX_OUTPUT_TOKENS` | `1400` | Upper bound on reserved output tokens per question batch |
-| `QUESTION_MAX_PREVIOUS_STEMS` | `15` | Max prior question stems passed to subsequent batches to prevent duplicates |
-| `QUIZ_SHORT_ANSWER_EVALUATOR` | `llm` | Short answer evaluator mode (`llm` or `deterministic`) |
-| `QUIZ_SHORT_ANSWER_CORRECT_THRESHOLD` | `0.75` | Deterministic token-overlap threshold for full credit (1.0 pt) |
-| `QUIZ_SHORT_ANSWER_PARTIAL_THRESHOLD` | `0.40` | Deterministic token-overlap threshold for partial credit (0.5 pt) |
+The default `.env.example` is pre-configured for local Ollama execution:
 
----
+```ini
+# LLM Provider Configuration
+LLM_PROVIDER=ollama
 
-## 7. Running the Application
+# Ollama Local LLM Configuration (Qwen2.5 7B)
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=qwen2.5:7b
+OLLAMA_TEMPERATURE=0.2
+OLLAMA_MAX_TOKENS=2048
+OLLAMA_CONTEXT_WINDOW=4096
+OLLAMA_TIMEOUT_SECONDS=60.0
+OLLAMA_KEEP_ALIVE=5m
 
-```bash
-./venv/bin/streamlit run app.py
+# Local Embeddings & Vector Store
+EMBEDDING_MODEL=all-MiniLM-L6-v2
+TOP_K=3
+SUMMARY_MAX_BATCH_TOKENS=2400
+QUESTION_MAX_BATCH_TOKENS=2400
+NOTES_MAX_BATCH_TOKENS=2400
+FLASHCARD_MAX_BATCH_TOKENS=2400
 ```
 
-1. **Upload & Index PDF:** Upload PDFs and click **Process & Index PDF** (duplicates blocked before indexing; persisted across restarts).
-2. **Vector Retrieval Testing:** Search across all PDFs or filter to one PDF and inspect ranked chunks with filename, page, `chunk_id`, and cosine similarity score.
-3. **PDF Summary:** Choose one PDF, pick Full Document / Page Range / Section / Topic and Short / Medium / Detailed, and click **Generate Summary**.
-4. **Practice Questions & Interactive Quiz:** Choose one PDF, pick Full Document / Page Range / Topic, choose question type (MCQ, Short Answer, True / False, Mixed), select Easy / Medium / Hard, choose question count, and click **Generate Practice Questions**.
-   * In **Study View**, toggle **Show Answers & Explanations** to reveal answers and explanations without calling the LLM.
-   * In **Interactive Quiz**, choose or type your answers with correct answers hidden. Select LLM or Deterministic grading for short answers, click **Submit Answers** to view discrete scores (`0.0`, `0.5`, `1.0`), type breakdown, per-question badges, and missed pages review. Click **Retry Quiz** to start a fresh attempt without re-calling question generation.
-5. **Quick Q&A (Groq):** Ask a grounded single-turn question across your indexed PDFs.
+> [!NOTE]
+> `GROQ_API_KEY` is completely optional. If left blank, StudyAstra operates in 100% offline local mode using Ollama.
 
 ---
 
-## 8. Running Automated Tests
+## 8. Running the Application
 
+### Preflight Diagnostics (Recommended)
+Before launching the app, run the built-in diagnostic script to verify system compatibility:
 ```bash
-# Full offline unit + Streamlit UI test suite (109 passed, 1 opt-in skipped)
-./venv/bin/python -m unittest discover -s tests -v
+python scripts/check_env.py
+```
 
-# Opt-in real all-MiniLM-L6-v2 embedding smoke test (1 passed)
-RUN_REAL_EMBEDDING_TESTS=1 ./venv/bin/python -m unittest tests.test_embeddings.TestRealEmbeddingModelSmoke -v
+### Launch the Streamlit App
+Start the web interface:
+```bash
+streamlit run app.py
+```
+
+The application will launch in your default web browser at:
+**[http://localhost:8501](http://localhost:8501)**
+
+---
+
+## 9. Running the Test Suite
+
+StudyAstra includes an automated unit and integration test suite covering vector indexing, transactional rollback, question generation schemas, quiz evaluation, conversation memory, and application lifecycle locks.
+
+Run the test suite from the repository root:
+```bash
+python -m unittest discover -s tests -p "test_*.py"
+```
+
+### Verified Test Results
+- **Total Tests:** 479
+- **Passed:** 478
+- **Skipped:** 1 (`tests.test_embeddings.TestRealEmbeddingModelSmoke` — opt-in live model download test)
+- **Failures / Errors:** 0
+
+All 478 tests run completely offline without requiring GPU hardware, external network access, or an active Ollama instance.
+
+---
+
+## 10. Project Directory Structure
+
+```text
+studyastra/
+├── app.py                              # Streamlit entry point & unified UI tabs
+├── requirements.txt                    # Verified runtime dependency manifest
+├── requirements-windows-prod.txt       # Production-pinned Windows manifest
+├── .env.example                        # Safe configuration template
+├── .gitignore                          # Excludes local data, keys, models & locks
+├── README.md                           # Project documentation
+├── scripts/
+│   ├── check_env.py                    # Preflight environment diagnostics
+│   └── prepare_model.py                # Embedding model cache preloader
+├── src/
+│   ├── config.py                       # Centralized configuration & validators
+│   ├── chat/                           # Multi-turn conversational RAG subsystem
+│   │   ├── conversation_memory.py      # Sliding-window memory & thread managers
+│   │   ├── chat_orchestrator.py        # Centralized turn execution & retrieval
+│   │   ├── chat_prompts.py             # Prompt engineering & strict refusal rules
+│   │   └── query_rewriter.py           # Ambiguous follow-up query rewrite engine
+│   ├── ingestion/
+│   │   ├── pdf_loader.py               # PyMuPDF text extractor & layout sorting
+│   │   └── chunker.py                  # Token-aware sentence/paragraph chunker
+│   ├── retrieval/
+│   │   ├── embeddings.py               # Local SentenceTransformer service
+│   │   ├── vector_store.py             # Transactional FAISS storage & generations
+│   │   └── retriever.py                # Top-K semantic similarity search
+│   ├── generation/
+│   │   ├── llm_provider.py             # Ollama & base provider abstractions
+│   │   ├── answer_generator.py         # Grounded single-turn Q&A engine
+│   │   ├── summarizer.py               # Hierarchical map-reduce summarizer
+│   │   ├── question_generator.py       # Practice question batch generator
+│   │   ├── quiz_evaluator.py           # MCQ, TF & short-answer quiz evaluator
+│   │   ├── study_notes_generator.py    # Academic structured notes generator
+│   │   ├── flashcard_generator.py      # Schema-validated flashcard generator
+│   │   └── explanation_generator.py    # Multi-level concept explainer
+│   └── utils/
+│       ├── app_lock.py                 # Single-instance OS byte-range locker
+│       ├── timer_manager.py            # Pomodoro & study challenge timers
+│       ├── study_statistics.py         # Local quiz and study performance stats
+│       └── file_utils.py               # SHA-256 document hashing & helpers
+└── tests/                              # Comprehensive offline unit test suite (479 tests)
 ```
 
 ---
 
-## 9. Current Limitations & Troubleshooting
+## 11. Known Limitations
 
-### Known Limitations
-* **Scanned / Image-Only PDFs (No OCR):** PyMuPDF extracts embedded text only. Image-only PDFs raise `"No readable text was found in this PDF."` OCR is not implemented yet.
-* **Lightweight Token Estimation:** `estimate_tokens()` uses a fast regex estimator (~10–15% variance vs. exact model tokenizers, safely absorbed by configured batch token budgets).
-* **Session-Only Summary, Question & Quiz Caches:** Generated summaries, questions, and active quiz sessions stay in Streamlit session state (never indexed in FAISS) and clear on browser restart or document deletion/store reset.
-* **Small-PDF Question Shortfalls:** Narrow page ranges or very brief PDFs may yield fewer unique grounded questions than requested; Study Bot displays a clear shortfall warning rather than fabricating facts or duplicates.
-* **Single-User Local Persistence:** Designed for single-user local execution rather than concurrent multi-writer servers.
-
-### Troubleshooting
-* **Incompatible Embedding Model / Corrupted Store:** Study Bot leaves existing local index files untouched and requires explicit confirmation before resetting.
-* **Missing `GROQ_API_KEY` Warning:** Only affects LLM tabs (**PDF Summary**, **Practice Questions**, **Quick Q&A**); upload, indexing, deletion, and **Vector Retrieval Testing** remain fully functional.
-* **Groq Rate Limits on Large PDFs or Quiz Grading:** Lower `SUMMARY_MAX_BATCH_TOKENS` or `QUESTION_MAX_BATCH_TOKENS` in `.env`, narrow the Page Range / Topic, or switch quiz short-answer evaluation to `deterministic` mode.
+- **Image-Only & Scanned PDFs:** Text extraction relies on embedded text streams via PyMuPDF. Scanned document images without an embedded OCR text layer will return an empty text notice.
+- **Hardware-Dependent Inference:** Generation latency depends on local hardware. On an NVIDIA RTX 4050 (6 GB VRAM) or equivalent, token streaming is near real-time (~30-50 tokens/sec); on CPU-only machines, generation takes longer depending on CPU core count.
+- **First-Run Embedding Model Download:** On the very first run, Sentence Transformers downloads the `all-MiniLM-L6-v2` model weights (~90 MB) into the local user cache (`~/.cache/huggingface/hub/`). Subsequent runs are completely offline.
 
 ---
 
-## 10. Planned Future Work (Not Yet Implemented)
+## 12. Academic Project Notice
 
-* **Ollama / Qwen Local LLM Integration** (`OllamaLLMProvider` for local Qwen models such as Qwen 2.5 3B).
-* **Timers & Timed Study Sessions** (timed quiz challenges, countdown clocks).
-* **Flashcards** (spaced-repetition study flashcards).
-* **Multi-Turn PDF Chatbot** (conversational RAG chat with persistent chat history).
-* **OCR** for scanned / image-only PDFs.
-* **Multi-Turn PDF Chatbot** (conversational RAG chat with persistent chat history).
-* **OCR** for scanned / image-only PDFs.
+StudyAstra was developed as a personal academic software engineering project to explore offline-capable Retrieval-Augmented Generation (RAG), local LLM orchestration, and computer-assisted study workflows.
+
+---
+
+## 13. License
+
+This repository does not currently include an open-source software license. All rights are reserved by the author. A formal open-source license may be added in a future release.

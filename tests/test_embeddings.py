@@ -141,7 +141,7 @@ class TestEmbeddingServiceUnit(unittest.TestCase):
 
         self.assertIs(first, sentinel)
         self.assertIs(second, sentinel)
-        mock_cls.assert_called_once_with(embeddings.EMBEDDING_MODEL)
+        mock_cls.assert_called_once_with(embeddings.EMBEDDING_MODEL, local_files_only=True)
         load_embedding_model.clear()
 
     def test_encoding_failure_raises_embedding_generation_error(self):

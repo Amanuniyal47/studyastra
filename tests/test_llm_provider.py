@@ -1,7 +1,10 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-import groq
+try:
+    import groq
+except ImportError:
+    groq = None  # type: ignore[assignment]
 import httpx
 
 import src.config as config
@@ -9,6 +12,7 @@ from src.generation.answer_generator import generate_answer
 from src.generation.llm_provider import (
     BaseLLMProvider,
     GroqLLMProvider,
+    OllamaLLMProvider,
     LLMConfigurationError,
     LLMProviderError,
     _PROVIDER_REGISTRY,
@@ -54,7 +58,8 @@ def _dummy_httpx_response(status_code: int) -> httpx.Response:
 
 class TestStage61aLLMProvider(unittest.TestCase):
     def test_config_defaults_present(self):
-        self.assertEqual(config.LLM_PROVIDER, "groq")
+        self.assertIn(config.LLM_PROVIDER, ("ollama", "groq"))
+        self.assertEqual(config.OLLAMA_MODEL, "qwen2.5:7b")
         self.assertGreater(config.SUMMARY_MAX_BATCH_TOKENS, 500)
         self.assertGreater(config.SUMMARY_TOPIC_TOP_K, 0)
         self.assertGreater(config.LLM_TIMEOUT_SECONDS, 0)
@@ -140,10 +145,10 @@ class TestStage61aLLMProvider(unittest.TestCase):
         self.assertIsInstance(provider, GroqLLMProvider)
         self.assertIn("groq", list_registered_providers())
 
-        # Ollama is intentionally not implemented yet in Stage 6.1
-        with self.assertRaises(LLMConfigurationError) as ctx:
-            get_llm_provider("ollama")
-        self.assertIn("not implemented yet", str(ctx.exception).lower())
+        # Ollama provider is registered and returned via factory
+        self.assertIn("ollama", list_registered_providers())
+        ollama_provider = get_llm_provider("ollama")
+        self.assertIsInstance(ollama_provider, OllamaLLMProvider)
 
         with self.assertRaises(LLMConfigurationError):
             get_llm_provider("unknown_provider")

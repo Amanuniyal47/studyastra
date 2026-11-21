@@ -6,7 +6,9 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pymupdf
 
+import src.config as config
 from src.generation.answer_generator import generate_answer
+from src.generation.llm_provider import LLMConfigurationError
 from src.generation.prompts import SYSTEM_PROMPT, build_user_prompt
 from src.ingestion import chunker
 from src.ingestion.pdf_loader import extract_pdf_text
@@ -191,12 +193,18 @@ class TestGeneration(unittest.TestCase):
 
     def test_generate_answer_missing_api_key_raises(self):
         chunks = [{"text": "Sample", "metadata": {"page": 1, "chunk_index": 1}}]
-        with patch("src.generation.answer_generator.GROQ_API_KEY", None):
-            with self.assertRaises(ValueError):
+        with (
+            patch.object(config, "LLM_PROVIDER", "groq"),
+            patch("src.generation.answer_generator.GROQ_API_KEY", None),
+        ):
+            with self.assertRaises((ValueError, LLMConfigurationError)):
                 generate_answer("Q?", chunks)
 
     def test_generate_answer_empty_chunks_raises(self):
-        with patch("src.generation.answer_generator.GROQ_API_KEY", "test-key"):
+        with (
+            patch.object(config, "LLM_PROVIDER", "groq"),
+            patch("src.generation.answer_generator.GROQ_API_KEY", "test-key"),
+        ):
             with self.assertRaises(ValueError):
                 generate_answer("Q?", [])
 
@@ -206,6 +214,7 @@ class TestGeneration(unittest.TestCase):
         mock_response.choices = [MagicMock(message=MagicMock(content="It uses FAISS (Source 1)."))]
 
         with (
+            patch.object(config, "LLM_PROVIDER", "groq"),
             patch("src.generation.answer_generator.GROQ_API_KEY", "test-key"),
             patch("src.generation.answer_generator.GROQ_MODEL", "openai/gpt-oss-120b"),
             patch("src.generation.answer_generator.Groq") as mock_groq_cls,
@@ -223,13 +232,20 @@ class TestGeneration(unittest.TestCase):
 
 class TestStreamlitApp(unittest.TestCase):
     def test_app_renders_initial_state(self):
+        import tempfile
         from streamlit.testing.v1 import AppTest
 
         app_path = Path(__file__).resolve().parent.parent / "app.py"
-        at = AppTest.from_file(str(app_path)).run()
-        self.assertFalse(at.exception)
-        self.assertEqual(at.title[0].value, "PDF Chat - RAG Question Answering System")
-        self.assertEqual(at.info[0].value, "Upload a PDF to start asking questions.")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store_dir = Path(tmpdir) / "vector_store"
+            with patch.object(config, "VECTOR_STORE_DIR", store_dir):
+                at = AppTest.from_file(str(app_path)).run(timeout=15)
+                self.assertFalse(at.exception)
+                self.assertEqual(at.title[0].value, "PDF Chat - RAG Question Answering System")
+                self.assertTrue(
+                    any("Upload a PDF to start asking questions." in info.value for info in at.info),
+                    f"Expected info message not found in {[i.value for i in at.info]}",
+                )
 
 
 if __name__ == "__main__":

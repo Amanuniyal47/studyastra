@@ -5,16 +5,60 @@ and search queries so preprocessing, dimensions, and vector normalization stay
 strictly aligned and decoupled from Groq or future local LLMs (e.g., Ollama).
 """
 
-from collections.abc import Sequence
+import os
+# Enforce offline operation for Hugging Face Hub and Transformers before library imports
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
+from collections.abc import Callable, Sequence
 import logging
 
 import numpy as np
-from sentence_transformers import SentenceTransformer
+try:
+    from sentence_transformers import SentenceTransformer
+except ImportError:
+    SentenceTransformer = None  # type: ignore[assignment, misc]
 import streamlit as st
 
 from src.config import EMBEDDING_BATCH_SIZE, EMBEDDING_MODEL
 
 logger = logging.getLogger(__name__)
+
+REQUIRED_CACHE_FILES = [
+    "modules.json",
+    "config.json",
+    "model.safetensors",
+    "1_Pooling/config.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+]
+
+
+def verify_offline_cache(model_name: str | None = None) -> tuple[bool, list[str]]:
+    """Verify the presence of all 6 mandatory files for offline model loading.
+
+    Uses huggingface_hub's cache inspection without importing torch or initializing
+    heavy neural network weights.
+
+    Returns:
+        tuple[bool, list[str]]: (is_complete, missing_files)
+    """
+    target_model = (EMBEDDING_MODEL if model_name is None else model_name).strip()
+    missing: list[str] = []
+
+    try:
+        from huggingface_hub import try_to_load_from_cache
+
+        repo_id = target_model if "/" in target_model else f"sentence-transformers/{target_model}"
+        for filename in REQUIRED_CACHE_FILES:
+            res = try_to_load_from_cache(repo_id, filename)
+            if not isinstance(res, str) or not os.path.isfile(res):
+                missing.append(filename)
+    except Exception as exc:
+        logger.warning("Cache verification encountered exception: %s", exc)
+        missing.append(f"Cache inspection error: {exc}")
+
+    return (len(missing) == 0, missing)
 
 
 class EmbeddingError(RuntimeError):
@@ -44,14 +88,19 @@ def preprocess_text(text: str, index: int | None = None) -> str:
 
 @st.cache_resource(show_spinner=False)
 def _load_cached_embedding_model(model_name: str) -> SentenceTransformer:
-    try:
-        logger.info("Loading embedding model '%s'", model_name)
-        return SentenceTransformer(model_name)
-    except Exception as exc:
-        logger.exception("Failed to initialize embedding model '%s'", model_name)
+    if SentenceTransformer is None:
         raise EmbeddingModelError(
-            f"Unable to load embedding model '{model_name}'. "
-            "Check the model name, local cache, or network connectivity."
+            "The 'sentence-transformers' package is not installed. "
+            "Please install it using 'pip install sentence-transformers'."
+        )
+    try:
+        logger.info("Loading embedding model '%s' from offline cache", model_name)
+        return SentenceTransformer(model_name, local_files_only=True)
+    except Exception as exc:
+        logger.exception("Failed to initialize embedding model '%s' offline", model_name)
+        raise EmbeddingModelError(
+            f"Unable to load embedding model '{model_name}' from local offline cache. "
+            "Check that the model files are cached or run 'python scripts/prepare_model.py' to download them."
         ) from exc
 
 
@@ -182,11 +231,13 @@ class EmbeddingService:
         texts: Sequence[str],
         batch_size: int | None = None,
         normalize: bool = True,
+        progress_callback: Callable[[int, int, str], None] | None = None,
     ) -> np.ndarray:
         """Generate validated embeddings for a non-empty sequence of texts.
 
         Rejects empty collections and blank strings rather than skipping them so
         output row indices remain strictly aligned with input chunk metadata.
+        Emits incremental progress updates per batch when progress_callback is provided.
         """
         if isinstance(texts, (str, bytes)) or not isinstance(texts, Sequence):
             raise ValueError("texts must be a non-empty sequence of strings.")
@@ -202,7 +253,27 @@ class EmbeddingService:
         ]
 
         expected_dim = self.get_dimension()
-        vectors = self._encode_raw(cleaned_texts, batch_size=effective_batch_size)
+        total_texts = len(cleaned_texts)
+
+        if progress_callback is None:
+            vectors = self._encode_raw(cleaned_texts, batch_size=effective_batch_size)
+        else:
+            # Batch-by-batch execution for large documents to bound memory and emit progress
+            batch_vectors: list[np.ndarray] = []
+            completed = 0
+            for start_idx in range(0, total_texts, effective_batch_size):
+                end_idx = min(start_idx + effective_batch_size, total_texts)
+                batch_slice = cleaned_texts[start_idx:end_idx]
+                batch_vecs = self._encode_raw(batch_slice, batch_size=len(batch_slice))
+                batch_vectors.append(batch_vecs)
+                completed += len(batch_slice)
+                pct = min(100.0, (completed / max(1, total_texts)) * 100.0)
+                progress_callback(
+                    completed,
+                    total_texts,
+                    f"Generated embeddings for {completed}/{total_texts} chunks ({pct:.0f}%)...",
+                )
+            vectors = np.vstack(batch_vectors)
 
         if vectors.shape[1] != expected_dim:
             raise EmbeddingGenerationError(

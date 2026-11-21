@@ -1,11 +1,32 @@
 # Project State
 
-- **Last Updated:** 2026-11-19
-- **Status:** Stage 6.3 (Interactive Practice & Quiz Evaluation — Sub-stages 6.3a–6.3c) Complete — Ready for Next Stage
-- **Active Milestone:** Stage 6.3 Complete
-- **Git Status:** Initialized (clean working tree on `main`, strictly excludes `.env` and `data/vector_store/`)
-- **Verification (Stage 6.3c):**
-  - Offline suite: 109 passed, 1 skipped (opt-in real-model test), 0 failures (`110` total, `62.12s`)
-  - Real `all-MiniLM-L6-v2` smoke test (`tests.test_embeddings.TestRealEmbeddingModelSmoke`): 1 passed, 0 failures (`2.26s`)
-  - Live Streamlit `/_stcore/health`: HTTP 200 (`ok`), clean shutdown (`SIGTERM`, `returncode=0`), zero startup errors
-  - `requirements.txt` import audit: 7/7 exact 1:1 match
+- **Last Updated:** 2026-11-20
+- **Status:** Phase 11 (Performance Optimization, Reliability & Production Readiness) in progress. Stage 11.4 (Resilient Fault Recovery, Staging Cleanup & Timeout Hardening) Completed & Verified.
+- **Active Milestones:**
+  - Milestone 1: Baseline Stabilization (Complete)
+  - Milestone 2: Chunking, Local Embeddings & FAISS (Complete)
+  - Milestone 3: AI Capabilities & Grounded Generation (Stages 6.1–6.4, 7, 8, 9 Complete)
+  - Milestone 4: Phase 10 Multi-Turn Conversational PDF Chatbot (Stages 10.1–10.4 Complete)
+  - Milestone 5: Phase 11 Performance Optimization, Reliability & Production Readiness
+    - Stage 11.1: Automated Benchmarking Harness & Latency Profiling (Complete & Verified)
+    - Stage 11.2: UI Rerun Optimization, Health Check TTL & Memory Lifecycle (Complete & Verified)
+    - Stage 11.3: Large PDF Processing & Scalable Map-Reduce Pipeline (Complete & Verified)
+    - Stage 11.4: Resilient Fault Recovery, Staging Cleanup & Timeout Hardening (Complete & Verified)
+    - Stage 11.5: Production Deployment, Environment Diagnostics & Packaging (Complete & Verified)
+- **Active Bug Register:** See [BUGS.md](BUGS.md)
+  - **BUG-01:** Notes Generation Not Working (`Resolved` in Stage 8)
+  - **BUG-02:** Flashcard Generation Not Working (`Resolved` in Stage 7)
+- **Next Stage Target:**
+  - Public GitHub Release & Documentation Preparation (Stage 11.5 Release).
+- **Centralized Model Provider:** `OllamaLLMProvider` (`qwen2.5:7b` at `http://localhost:11434`)
+- **Embeddings:** `all-MiniLM-L6-v2` (Local SentenceTransformer)
+- **Vector Store:** FAISS `IndexIDMap2(IndexFlatIP)` with generation manifest transactions
+- **Verification Status:**
+  - 479 total automated tests executed: 478 passed, 1 opt-in skipped (`TestRealEmbeddingModelSmoke`), 0 failures, 0 errors.
+  - Stage 11.1 verified with 15 tests in `tests/test_benchmarks.py`.
+  - Stage 11.2 verified with 28 targeted tests in `tests/test_health_cache.py`, `tests/test_vector_store_optimization.py`, and `tests/test_session_lifecycle.py`.
+  - Stage 11.3 verified with 31 targeted tests across summarizer, pdf layout, embedding batching, and study notes.
+  - Stage 11.4 verified with 27 targeted fault injection, replacement boundary, and deterministic reader snapshot consistency tests in `tests/test_fault_recovery.py`.
+  - Stage 11.5 verified with 15 targeted single-instance lifecycle and lock tests in `tests/test_app_lifecycle.py` and 27 configuration/diagnostic tests.
+  - FAISS Reader Snapshot Isolation verified: atomic `_GenerationState` publishing guarantees 100% snapshot consistency for concurrent readers without table locks.
+  - Zero regressions across existing suite (AppTest, UI, Chat, RAG, Ingestion, Summarization, Question Generator, Flashcards, Notes).

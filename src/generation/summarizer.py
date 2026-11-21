@@ -18,7 +18,7 @@ Key guarantees:
 """
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
 import re
 from typing import Any
@@ -77,6 +77,11 @@ class SummaryResult:
     source_chunks: list[dict[str, Any]]
     match_strategy: str | None = None
     match_notice: str | None = None
+    status: str = "complete"
+    total_eligible_chunks: int = 0
+    processed_chunks: int = 0
+    failed_chunks: int = 0
+    failed_batch_indices: list[int] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -95,6 +100,11 @@ class SummaryResult:
             "model": self.model,
             "match_strategy": self.match_strategy,
             "match_notice": self.match_notice,
+            "status": self.status,
+            "total_eligible_chunks": self.total_eligible_chunks,
+            "processed_chunks": self.processed_chunks,
+            "failed_chunks": self.failed_chunks,
+            "failed_batch_indices": list(self.failed_batch_indices),
             "source_chunks": self.source_chunks,
         }
 
@@ -328,6 +338,11 @@ def _summarize_chunks_hierarchical(
             source_chunks=normalized_sources,
             match_strategy=match_strategy,
             match_notice=match_notice,
+            status="complete",
+            total_eligible_chunks=len(chunks),
+            processed_chunks=len(chunks),
+            failed_chunks=0,
+            failed_batch_indices=[],
         )
 
     # Multi-batch hierarchical map-reduce path
@@ -359,6 +374,9 @@ def _summarize_chunks_hierarchical(
     current_step = 0
     intermediate_items: list[dict[str, Any]] = []
     map_max_tokens = min(600, max(300, spec["max_tokens"]))
+    failed_batches: list[dict[str, Any]] = []
+    processed_chunks_count = 0
+    failed_chunks_count = 0
 
     for idx, batch in enumerate(map_batches, start=1):
         batch_pages = sorted({int(c["page"]) for c in batch})
@@ -378,12 +396,23 @@ def _summarize_chunks_hierarchical(
             length=normalized_length,
             formatted_entries=[format_chunk_entry(c) for c in batch],
         )
-        batch_summary = provider.generate(
-            SUMMARY_SYSTEM_PROMPT,
-            map_prompt,
-            temperature=0.2,
-            max_tokens=map_max_tokens,
-        )
+        try:
+            batch_summary = provider.generate(
+                SUMMARY_SYSTEM_PROMPT,
+                map_prompt,
+                temperature=0.2,
+                max_tokens=map_max_tokens,
+            )
+        except Exception as exc:
+            logger.exception(
+                "Map batch %d/%d (%s) generation failed: %s",
+                idx,
+                total_map_batches,
+                batch_page_label,
+                exc,
+            )
+            raise
+
         intermediate_items.append(
             {
                 "filename": filename,
@@ -393,10 +422,12 @@ def _summarize_chunks_hierarchical(
                 "summary_text": batch_summary,
             }
         )
+        processed_chunks_count += len(batch)
 
-    # Hierarchical reduce loop (bounded by MAX_REDUCTION_LEVELS to prevent over-compression)
+    # Hierarchical reduce loop (bounded by configurable MAX_REDUCTION_LEVELS to handle large documents)
     reduction_level = 0
-    total_batches_processed = total_map_batches
+    total_batches_processed = len(intermediate_items)
+    effective_max_levels = getattr(config, "MAX_REDUCTION_LEVELS", 6)
 
     def _format_intermediate(item: dict[str, Any]) -> str:
         return format_intermediate_summary_entry(
@@ -408,12 +439,13 @@ def _summarize_chunks_hierarchical(
 
     while True:
         reduction_level += 1
-        if reduction_level > MAX_REDUCTION_LEVELS:
-            raise SummarizationError(
-                f"Document summaries exceeded {MAX_REDUCTION_LEVELS} hierarchical reduction levels "
-                f"within SUMMARY_MAX_BATCH_TOKENS={max_batch_tokens}. "
-                "Increase SUMMARY_MAX_BATCH_TOKENS or summarize a smaller page range to preserve quality."
+        if reduction_level > effective_max_levels:
+            logger.warning(
+                "Reached maximum reduction level %d within token budget; creating consolidated synthesis.",
+                effective_max_levels,
             )
+            final_summary = "\n\n---\n\n".join(it["summary_text"] for it in intermediate_items)
+            break
 
         # Check if all current intermediate summaries fit into ONE final reduce call
         all_formatted = [_format_intermediate(item) for item in intermediate_items]
@@ -469,12 +501,28 @@ def _summarize_chunks_hierarchical(
             system_prompt=SUMMARY_SYSTEM_PROMPT,
             max_batch_tokens=max_batch_tokens,
         )
-        if len(reduce_groups) >= len(intermediate_items):
-            raise SummarizationError(
-                "Intermediate summaries could not be reduced further within "
-                f"SUMMARY_MAX_BATCH_TOKENS={max_batch_tokens}. "
-                "Increase SUMMARY_MAX_BATCH_TOKENS or summarize a smaller page range."
+        # Guarantee convergence: if reduce_groups >= len(intermediate_items),
+        # compress intermediate texts to ensure groups pair at least 2 items
+        if len(reduce_groups) >= len(intermediate_items) and len(intermediate_items) > 1:
+            logger.info("Intermediate summaries too verbose for reduction; compressing to force grouping.")
+            compressed_items = []
+            for it in intermediate_items:
+                c_it = dict(it)
+                c_it["summary_text"] = _truncate_text_to_tokens(it["summary_text"], 250)
+                compressed_items.append(c_it)
+            intermediate_items = compressed_items
+            reduce_groups = _pack_items_within_budget(
+                intermediate_items,
+                format_item=_format_intermediate,
+                build_prompt=_intermediate_reduce_builder,
+                system_prompt=SUMMARY_SYSTEM_PROMPT,
+                max_batch_tokens=max_batch_tokens,
             )
+            if len(reduce_groups) >= len(intermediate_items):
+                reduce_groups = [
+                    intermediate_items[i : i + 2]
+                    for i in range(0, len(intermediate_items), 2)
+                ]
 
         total_steps = current_step + len(reduce_groups) + 1
         next_level_items: list[dict[str, Any]] = []
@@ -514,6 +562,33 @@ def _summarize_chunks_hierarchical(
             )
         intermediate_items = next_level_items
 
+    # Formulate coverage status and notice
+    level_limit_exceeded = (reduction_level > effective_max_levels)
+    if failed_batches or level_limit_exceeded:
+        status = "partial"
+        reasons: list[str] = []
+        if failed_batches:
+            missing_desc = "; ".join(
+                f"Batch {fb['batch_index']} ({fb['page_range_label']})"
+                for fb in failed_batches
+            )
+            reasons.append(
+                f"{len(failed_batches)} of {total_map_batches} batches failed to process [{missing_desc}]"
+            )
+        if level_limit_exceeded:
+            reasons.append(
+                f"Reached maximum reduction level limit ({effective_max_levels}); consolidated remaining {len(intermediate_items)} sections"
+            )
+        coverage_notice = f"Partial summary: {'; '.join(reasons)}. Grounded on {processed_chunks_count} chunks."
+        resolved_notice = (
+            f"{match_notice} | {coverage_notice}"
+            if match_notice
+            else coverage_notice
+        )
+    else:
+        status = "complete"
+        resolved_notice = match_notice
+
     normalized_sources = _build_normalized_sources(chunks, source_scores)
     return SummaryResult(
         summary_text=final_summary,
@@ -523,7 +598,7 @@ def _summarize_chunks_hierarchical(
         length=normalized_length,
         pages_covered=all_pages,
         page_range_label=overall_page_label,
-        chunks_used=len(chunks),
+        chunks_used=processed_chunks_count,
         batches_processed=total_batches_processed,
         reduction_levels=reduction_level,
         hierarchical=True,
@@ -531,7 +606,12 @@ def _summarize_chunks_hierarchical(
         model=provider.model_name,
         source_chunks=normalized_sources,
         match_strategy=match_strategy,
-        match_notice=match_notice,
+        match_notice=resolved_notice,
+        status=status,
+        total_eligible_chunks=len(chunks),
+        processed_chunks=processed_chunks_count,
+        failed_chunks=failed_chunks_count,
+        failed_batch_indices=[fb["batch_index"] for fb in failed_batches],
     )
 
 

@@ -12,15 +12,21 @@ Architecture:
 - Completely independent of Groq or any LLM provider.
 """
 
+from __future__ import annotations
 from copy import deepcopy
 import json
 import logging
 import os
 from pathlib import Path
 import shutil
+import threading
+import time
 from typing import Any
 
-import faiss
+try:
+    import faiss
+except ImportError:
+    faiss = None  # type: ignore[assignment]
 import numpy as np
 import streamlit as st
 
@@ -29,7 +35,9 @@ from src.config import (
     CHUNK_SIZE_TOKENS,
     EMBEDDING_MODEL,
     TOP_K,
+    VECTOR_STORE_CLEANUP_STAGING,
     VECTOR_STORE_DIR,
+    VECTOR_STORE_STAGING_MAX_AGE_SECONDS,
 )
 from src.database.document_manager import DocumentManager, DocumentRegistryError
 from src.ingestion.chunker import chunk_text
@@ -105,7 +113,30 @@ def _read_json(path: Path, label: str) -> dict[str, Any]:
     return data
 
 
+def _safe_replace(src: Path, dst: Path, max_retries: int = 3, retry_delay: float = 0.05) -> None:
+    """Atomically replace src to dst with retries on transient Windows file locking errors."""
+    for attempt in range(max_retries):
+        try:
+            os.replace(src, dst)
+            return
+        except OSError as exc:
+            if attempt == max_retries - 1:
+                logger.error(
+                    "os.replace failed to replace %s with %s after %d attempts: %s",
+                    src,
+                    dst,
+                    max_retries,
+                    exc,
+                )
+                raise
+            time.sleep(retry_delay * (2 ** attempt))
+
+
 def _create_empty_index(dimension: int) -> faiss.IndexIDMap2:
+    if faiss is None:
+        raise VectorStoreError(
+            "The 'faiss-cpu' package is not installed. Please install it using 'pip install faiss-cpu'."
+        )
     if not isinstance(dimension, int) or dimension <= 0:
         raise ValueError("embedding_dimension must be a positive integer.")
     return faiss.IndexIDMap2(faiss.IndexFlatIP(dimension))
@@ -118,6 +149,44 @@ def _extract_faiss_ids(index: faiss.Index) -> list[int]:
         )
     raw_ids = faiss.vector_to_array(index.id_map)
     return [int(v) for v in raw_ids.tolist()]
+
+
+def _clone_chunk_metadata(chunk: dict[str, Any]) -> dict[str, Any]:
+    """Create an isolated defensive copy of a chunk dictionary, recursively cloning nested collections.
+
+    Guarantees that caller mutations to the returned dictionary or any nested
+    collections (dicts, lists, sets) cannot affect internal vector store state.
+    """
+    def _clone_val(v):
+        if isinstance(v, dict):
+            return {k2: _clone_val(v2) for k2, v2 in v.items()}
+        elif isinstance(v, list):
+            return [_clone_val(x) for x in v]
+        elif isinstance(v, set):
+            return {_clone_val(x) for x in v}
+        return v
+
+    return {k: _clone_val(v) for k, v in chunk.items()}
+
+
+class _GenerationState:
+    """Immutable snapshot holding in-memory state for a committed generation."""
+
+    __slots__ = ("generation", "index", "chunks", "document_manager", "next_vector_id")
+
+    def __init__(
+        self,
+        generation: int,
+        index: faiss.IndexIDMap2 | None,
+        chunks: dict[int, dict[str, Any]],
+        document_manager: DocumentManager,
+        next_vector_id: int,
+    ) -> None:
+        self.generation = generation
+        self.index = index
+        self.chunks = chunks
+        self.document_manager = document_manager
+        self.next_vector_id = next_vector_id
 
 
 class FAISSVectorStore:
@@ -149,11 +218,14 @@ class FAISSVectorStore:
 
         self._embedding_service = embedding_service
         self.embedding_dimension: int | None = resolved_dim
-        self._active_generation: int = 0
-        self._next_vector_id: int = 1
-        self._index: faiss.IndexIDMap2 | None = None
-        self._chunks: dict[int, dict[str, Any]] = {}
-        self._document_manager = DocumentManager()
+        self._state: _GenerationState = _GenerationState(
+            generation=0,
+            index=None,
+            chunks={},
+            document_manager=DocumentManager(),
+            next_vector_id=1,
+        )
+        self._write_lock = threading.RLock()
 
         self.load_or_initialize()
 
@@ -167,19 +239,91 @@ class FAISSVectorStore:
 
     @property
     def total_vectors(self) -> int:
-        return int(self._index.ntotal) if self._index is not None else 0
+        idx = self._state.index
+        return int(idx.ntotal) if idx is not None else 0
 
     @property
     def total_documents(self) -> int:
-        return self._document_manager.count()
+        return self._state.document_manager.count()
 
     @property
     def next_vector_id(self) -> int:
-        return self._next_vector_id
+        return self._state.next_vector_id
 
     @property
     def active_generation(self) -> int:
-        return self._active_generation
+        return self._state.generation
+
+    # Backwards-compatible accessors for legacy code and test harnesses
+    @property
+    def _active_generation(self) -> int:
+        return self._state.generation
+
+    @_active_generation.setter
+    def _active_generation(self, val: int) -> None:
+        self._state = _GenerationState(
+            generation=val,
+            index=self._state.index,
+            chunks=self._state.chunks,
+            document_manager=self._state.document_manager,
+            next_vector_id=self._state.next_vector_id,
+        )
+
+    @property
+    def _next_vector_id(self) -> int:
+        return self._state.next_vector_id
+
+    @_next_vector_id.setter
+    def _next_vector_id(self, val: int) -> None:
+        self._state = _GenerationState(
+            generation=self._state.generation,
+            index=self._state.index,
+            chunks=self._state.chunks,
+            document_manager=self._state.document_manager,
+            next_vector_id=val,
+        )
+
+    @property
+    def _index(self) -> faiss.IndexIDMap2 | None:
+        return self._state.index
+
+    @_index.setter
+    def _index(self, val: faiss.IndexIDMap2 | None) -> None:
+        self._state = _GenerationState(
+            generation=self._state.generation,
+            index=val,
+            chunks=self._state.chunks,
+            document_manager=self._state.document_manager,
+            next_vector_id=self._state.next_vector_id,
+        )
+
+    @property
+    def _chunks(self) -> dict[int, dict[str, Any]]:
+        return self._state.chunks
+
+    @_chunks.setter
+    def _chunks(self, val: dict[int, dict[str, Any]]) -> None:
+        self._state = _GenerationState(
+            generation=self._state.generation,
+            index=self._state.index,
+            chunks=val,
+            document_manager=self._state.document_manager,
+            next_vector_id=self._state.next_vector_id,
+        )
+
+    @property
+    def _document_manager(self) -> DocumentManager:
+        return self._state.document_manager
+
+    @_document_manager.setter
+    def _document_manager(self, val: DocumentManager) -> None:
+        self._state = _GenerationState(
+            generation=self._state.generation,
+            index=self._state.index,
+            chunks=self._state.chunks,
+            document_manager=val,
+            next_vector_id=self._state.next_vector_id,
+        )
 
     def _resolve_dimension(self) -> int:
         if self.embedding_dimension is not None:
@@ -190,10 +334,17 @@ class FAISSVectorStore:
         return self.embedding_dimension
 
     def _ensure_index_initialized(self) -> faiss.IndexIDMap2:
-        if self._index is None:
+        if self._state.index is None:
             dim = self._resolve_dimension()
-            self._index = _create_empty_index(dim)
-        return self._index
+            new_idx = _create_empty_index(dim)
+            self._state = _GenerationState(
+                generation=self._state.generation,
+                index=new_idx,
+                chunks=self._state.chunks,
+                document_manager=self._state.document_manager,
+                next_vector_id=self._state.next_vector_id,
+            )
+        return self._state.index
 
     def _has_untracked_store_artifacts(self) -> bool:
         if not self.store_dir.exists():
@@ -306,133 +457,230 @@ class FAISSVectorStore:
 
     def load_or_initialize(self) -> None:
         """Load the active persisted generation or initialize a fresh empty store."""
-        if not self.manifest_path.exists():
-            if self._has_untracked_store_artifacts():
-                raise VectorStoreCorruptionError(
-                    "Vector store manifest.json is missing while store files exist. "
-                    "The store may be corrupted or incomplete."
+        with self._write_lock:
+            if VECTOR_STORE_CLEANUP_STAGING:
+                self.cleanup_staging_artifacts(max_age_seconds=VECTOR_STORE_STAGING_MAX_AGE_SECONDS)
+
+            if not self.manifest_path.exists():
+                # Attempt recovery if a valid manifest.json.tmp exists from an interrupted commit
+                tmp_manifest = self.store_dir / f"{MANIFEST_FILENAME}.tmp"
+                if tmp_manifest.is_file():
+                    try:
+                        tmp_data = _read_json(tmp_manifest, "temporary manifest")
+                        target_gen = tmp_data.get("active_generation")
+                        required_manifest_keys = (
+                            "schema_version",
+                            "active_generation",
+                            "embedding_model",
+                            "dimension",
+                            "next_vector_id",
+                            "index_file",
+                            "metadata_file",
+                            "documents_file",
+                        )
+                        has_all_keys = all(k in tmp_data for k in required_manifest_keys)
+                        if has_all_keys and isinstance(target_gen, int) and target_gen > 0:
+                            idx_path = self.store_dir / tmp_data["index_file"]
+                            meta_path = self.store_dir / tmp_data["metadata_file"]
+                            docs_path = self.store_dir / tmp_data["documents_file"]
+                            if idx_path.is_file() and meta_path.is_file() and docs_path.is_file():
+                                logger.info("Recovering manifest.json from valid leftover manifest.json.tmp")
+                                _safe_replace(tmp_manifest, self.manifest_path)
+                            else:
+                                logger.warning("Leftover tmp manifest references missing generation files; skipping recovery.")
+                    except Exception as rec_err:
+                        logger.warning("Could not recover manifest from tmp: %s", rec_err)
+
+            if not self.manifest_path.exists():
+                if self._has_untracked_store_artifacts():
+                    raise VectorStoreCorruptionError(
+                        "Vector store manifest.json is missing while store files exist. "
+                        "The store may be corrupted or incomplete."
+                    )
+                self._state = _GenerationState(
+                    generation=0,
+                    index=(
+                        _create_empty_index(self.embedding_dimension)
+                        if self.embedding_dimension is not None
+                        else None
+                    ),
+                    chunks={},
+                    document_manager=DocumentManager(),
+                    next_vector_id=1,
                 )
-            self._active_generation = 0
-            self._next_vector_id = 1
-            self._chunks = {}
-            self._document_manager = DocumentManager()
-            self._index = (
-                _create_empty_index(self.embedding_dimension)
-                if self.embedding_dimension is not None
-                else None
+                return
+
+            manifest = _read_json(self.manifest_path, "manifest")
+            required_manifest = (
+                "schema_version",
+                "active_generation",
+                "embedding_model",
+                "dimension",
+                "next_vector_id",
+                "index_file",
+                "metadata_file",
+                "documents_file",
             )
-            return
-
-        manifest = _read_json(self.manifest_path, "manifest")
-        required_manifest = (
-            "schema_version",
-            "active_generation",
-            "embedding_model",
-            "dimension",
-            "next_vector_id",
-            "index_file",
-            "metadata_file",
-            "documents_file",
-        )
-        missing = [k for k in required_manifest if k not in manifest]
-        if missing:
-            raise VectorStoreCorruptionError(
-                f"Corrupted manifest.json: missing field(s): {', '.join(missing)}."
-            )
-
-        stored_model = manifest["embedding_model"]
-        stored_dim = manifest["dimension"]
-        if not isinstance(stored_model, str) or not stored_model.strip():
-            raise VectorStoreCorruptionError("Corrupted manifest.json: invalid embedding_model.")
-        if not isinstance(stored_dim, int) or stored_dim <= 0:
-            raise VectorStoreCorruptionError("Corrupted manifest.json: invalid dimension.")
-
-        if stored_model != self.embedding_model:
-            raise VectorStoreCompatibilityError(
-                f"Incompatible embedding model: persisted index was built with "
-                f"'{stored_model}', but current configuration uses '{self.embedding_model}'."
-            )
-
-        if self.embedding_dimension is not None and stored_dim != self.embedding_dimension:
-            raise VectorStoreCompatibilityError(
-                f"Incompatible embedding dimension: persisted index has dimension "
-                f"{stored_dim}, but current model '{self.embedding_model}' has dimension "
-                f"{self.embedding_dimension}."
-            )
-
-        index_path = self.store_dir / manifest["index_file"]
-        metadata_path = self.store_dir / manifest["metadata_file"]
-        documents_path = self.store_dir / manifest["documents_file"]
-
-        if not index_path.is_file():
-            raise VectorStoreCorruptionError(f"Missing FAISS index file: {manifest['index_file']}.")
-
-        try:
-            loaded_index = faiss.read_index(str(index_path))
-        except Exception as exc:
-            logger.exception("Failed to read FAISS index from %s", index_path)
-            raise VectorStoreCorruptionError(
-                f"Corrupted FAISS index file ({index_path.name}): unable to load."
-            ) from exc
-
-        metadata_payload = _read_json(metadata_path, "metadata")
-        documents_payload = _read_json(documents_path, "documents")
-
-        if metadata_payload.get("embedding_model") != stored_model:
-            raise VectorStoreCorruptionError(
-                "Metadata embedding_model does not match manifest embedding_model."
-            )
-        if metadata_payload.get("dimension") != stored_dim:
-            raise VectorStoreCorruptionError(
-                "Metadata dimension does not match manifest dimension."
-            )
-
-        raw_chunks = metadata_payload.get("chunks")
-        if not isinstance(raw_chunks, dict):
-            raise VectorStoreCorruptionError("Corrupted metadata.json: 'chunks' must be an object.")
-
-        parsed_chunks: dict[int, dict[str, Any]] = {}
-        for raw_key, chunk_record in raw_chunks.items():
-            try:
-                vid = int(raw_key)
-            except (TypeError, ValueError) as exc:
+            missing = [k for k in required_manifest if k not in manifest]
+            if missing:
                 raise VectorStoreCorruptionError(
-                    f"Corrupted metadata.json: non-integer vector key '{raw_key}'."
+                    f"Corrupted manifest.json: missing field(s): {', '.join(missing)}."
+                )
+
+            stored_model = manifest["embedding_model"]
+            stored_dim = manifest["dimension"]
+            if not isinstance(stored_model, str) or not stored_model.strip():
+                raise VectorStoreCorruptionError("Corrupted manifest.json: invalid embedding_model.")
+            if not isinstance(stored_dim, int) or stored_dim <= 0:
+                raise VectorStoreCorruptionError("Corrupted manifest.json: invalid dimension.")
+
+            if stored_model != self.embedding_model:
+                raise VectorStoreCompatibilityError(
+                    f"Incompatible embedding model: persisted index was built with "
+                    f"'{stored_model}', but current configuration uses '{self.embedding_model}'."
+                )
+
+            if self.embedding_dimension is not None and stored_dim != self.embedding_dimension:
+                raise VectorStoreCompatibilityError(
+                    f"Incompatible embedding dimension: persisted index has dimension "
+                    f"{stored_dim}, but current model '{self.embedding_model}' has dimension "
+                    f"{self.embedding_dimension}."
+                )
+
+            index_path = self.store_dir / manifest["index_file"]
+            metadata_path = self.store_dir / manifest["metadata_file"]
+            documents_path = self.store_dir / manifest["documents_file"]
+
+            if not index_path.is_file():
+                raise VectorStoreCorruptionError(f"Missing FAISS index file: {manifest['index_file']}.")
+
+            try:
+                loaded_index = faiss.read_index(str(index_path))
+            except Exception as exc:
+                logger.exception("Failed to read FAISS index from %s", index_path)
+                raise VectorStoreCorruptionError(
+                    f"Corrupted FAISS index file ({index_path.name}): unable to load."
                 ) from exc
-            parsed_chunks[vid] = chunk_record
 
-        raw_docs = documents_payload.get("documents")
-        if not isinstance(raw_docs, dict):
-            raise VectorStoreCorruptionError(
-                "Corrupted documents.json: 'documents' must be an object."
+            metadata_payload = _read_json(metadata_path, "metadata")
+            documents_payload = _read_json(documents_path, "documents")
+
+            if metadata_payload.get("embedding_model") != stored_model:
+                raise VectorStoreCorruptionError(
+                    "Metadata embedding_model does not match manifest embedding_model."
+                )
+            if metadata_payload.get("dimension") != stored_dim:
+                raise VectorStoreCorruptionError(
+                    "Metadata dimension does not match manifest dimension."
+                )
+
+            raw_chunks = metadata_payload.get("chunks")
+            if not isinstance(raw_chunks, dict):
+                raise VectorStoreCorruptionError("Corrupted metadata.json: 'chunks' must be an object.")
+
+            parsed_chunks: dict[int, dict[str, Any]] = {}
+            for raw_key, chunk_record in raw_chunks.items():
+                try:
+                    vid = int(raw_key)
+                except (TypeError, ValueError) as exc:
+                    raise VectorStoreCorruptionError(
+                        f"Corrupted metadata.json: non-integer vector key '{raw_key}'."
+                    ) from exc
+                parsed_chunks[vid] = chunk_record
+
+            raw_docs = documents_payload.get("documents")
+            if not isinstance(raw_docs, dict):
+                raise VectorStoreCorruptionError(
+                    "Corrupted documents.json: 'documents' must be an object."
+                )
+
+            doc_manager = DocumentManager()
+            try:
+                doc_manager.load_from_dict(raw_docs)
+            except DocumentRegistryError as exc:
+                raise VectorStoreCorruptionError(f"Corrupted documents.json: {exc}") from exc
+
+            next_vid = manifest["next_vector_id"]
+            if metadata_payload.get("next_vector_id") != next_vid:
+                raise VectorStoreCorruptionError(
+                    "Metadata next_vector_id does not match manifest next_vector_id."
+                )
+
+            self._validate_consistency(
+                index=loaded_index,
+                chunks=parsed_chunks,
+                document_manager=doc_manager,
+                expected_dimension=stored_dim,
+                next_vector_id=next_vid,
             )
 
-        doc_manager = DocumentManager()
-        try:
-            doc_manager.load_from_dict(raw_docs)
-        except DocumentRegistryError as exc:
-            raise VectorStoreCorruptionError(f"Corrupted documents.json: {exc}") from exc
-
-        next_vid = manifest["next_vector_id"]
-        if metadata_payload.get("next_vector_id") != next_vid:
-            raise VectorStoreCorruptionError(
-                "Metadata next_vector_id does not match manifest next_vector_id."
+            self.embedding_dimension = stored_dim
+            self._state = _GenerationState(
+                generation=int(manifest["active_generation"]),
+                index=loaded_index,
+                chunks=parsed_chunks,
+                document_manager=doc_manager,
+                next_vector_id=int(next_vid),
             )
 
-        self._validate_consistency(
-            index=loaded_index,
-            chunks=parsed_chunks,
-            document_manager=doc_manager,
-            expected_dimension=stored_dim,
-            next_vector_id=next_vid,
+    def cleanup_staging_artifacts(
+        self,
+        max_age_seconds: float | None = None,
+    ) -> list[str]:
+        """Clean up orphaned staging directories (*.staging) and temporary manifest files.
+
+        Safely removes leftover staging directories without touching the active generation
+        or committed files. If max_age_seconds is specified (> 0), only removes staging
+        artifacts whose modification time is older than max_age_seconds. If max_age_seconds
+        is <= 0, removes all staging artifacts regardless of age. If None, defaults to
+        VECTOR_STORE_STAGING_MAX_AGE_SECONDS.
+
+        Never touches:
+        - Active generation directory (gen_<active_generation>)
+        - Committed manifest.json
+        - Committed generation directories (gen_<N>)
+
+        Returns a list of removed artifact paths.
+        """
+        effective_max_age = (
+            VECTOR_STORE_STAGING_MAX_AGE_SECONDS
+            if max_age_seconds is None
+            else max_age_seconds
         )
+        removed: list[str] = []
+        with self._write_lock:
+            now = time.time()
+            # 1. Clean tmp manifest
+            tmp_manifest = self.store_dir / f"{MANIFEST_FILENAME}.tmp"
+            if tmp_manifest.is_file():
+                try:
+                    mtime = tmp_manifest.stat().st_mtime
+                    age = now - mtime
+                    if effective_max_age <= 0 or age >= effective_max_age:
+                        tmp_manifest.unlink()
+                        removed.append(str(tmp_manifest))
+                        logger.info("Cleaned up orphaned tmp manifest: %s (age=%.1fs)", tmp_manifest, age)
+                except OSError as exc:
+                    logger.warning("Could not remove tmp manifest %s: %s", tmp_manifest, exc)
 
-        self.embedding_dimension = stored_dim
-        self._active_generation = int(manifest["active_generation"])
-        self._next_vector_id = int(next_vid)
-        self._index = loaded_index
-        self._chunks = parsed_chunks
-        self._document_manager = doc_manager
+            # 2. Clean *.staging directories and *.tmp files in generations_dir
+            if self.generations_dir.is_dir():
+                for entry in self.generations_dir.iterdir():
+                    if entry.name.endswith(".staging") or entry.name.endswith(".tmp"):
+                        try:
+                            mtime = entry.stat().st_mtime
+                            age = now - mtime
+                            if effective_max_age <= 0 or age >= effective_max_age:
+                                if entry.is_dir():
+                                    shutil.rmtree(entry)
+                                else:
+                                    entry.unlink()
+                                removed.append(str(entry))
+                                logger.info("Cleaned up orphaned staging artifact: %s (age=%.1fs)", entry, age)
+                        except OSError as exc:
+                            logger.warning("Could not remove staging artifact %s: %s", entry, exc)
+
+        return removed
 
     def _cleanup_old_generations(self, keep_generation: int) -> None:
         if not self.generations_dir.is_dir():
@@ -458,97 +706,100 @@ class FAISSVectorStore:
         next_vector_id: int,
     ) -> None:
         """Persist a full generation snapshot and atomically flip manifest.json."""
-        dim = self._resolve_dimension()
-        self._validate_consistency(
-            index=next_index,
-            chunks=next_chunks,
-            document_manager=next_doc_manager,
-            expected_dimension=dim,
-            next_vector_id=next_vector_id,
-        )
+        with self._write_lock:
+            dim = self._resolve_dimension()
+            self._validate_consistency(
+                index=next_index,
+                chunks=next_chunks,
+                document_manager=next_doc_manager,
+                expected_dimension=dim,
+                next_vector_id=next_vector_id,
+            )
 
-        new_generation = self._active_generation + 1
-        gen_name = f"gen_{new_generation}"
-        staging_dir = self.generations_dir / f"{gen_name}.staging"
-        final_gen_dir = self.generations_dir / gen_name
-        tmp_manifest = self.store_dir / f"{MANIFEST_FILENAME}.tmp"
+            new_generation = self._state.generation + 1
+            gen_name = f"gen_{new_generation}"
+            staging_dir = self.generations_dir / f"{gen_name}.staging"
+            final_gen_dir = self.generations_dir / gen_name
+            tmp_manifest = self.store_dir / f"{MANIFEST_FILENAME}.tmp"
 
-        try:
-            self.generations_dir.mkdir(parents=True, exist_ok=True)
-            if staging_dir.exists():
-                shutil.rmtree(staging_dir)
-            if final_gen_dir.exists():
-                shutil.rmtree(final_gen_dir)
-            staging_dir.mkdir(parents=True, exist_ok=False)
+            try:
+                self.generations_dir.mkdir(parents=True, exist_ok=True)
+                if staging_dir.exists():
+                    shutil.rmtree(staging_dir)
+                if final_gen_dir.exists():
+                    shutil.rmtree(final_gen_dir)
+                staging_dir.mkdir(parents=True, exist_ok=False)
 
-            index_file = staging_dir / INDEX_FILENAME
-            metadata_file = staging_dir / METADATA_FILENAME
-            documents_file = staging_dir / DOCUMENTS_FILENAME
+                index_file = staging_dir / INDEX_FILENAME
+                metadata_file = staging_dir / METADATA_FILENAME
+                documents_file = staging_dir / DOCUMENTS_FILENAME
 
-            faiss.write_index(next_index, str(index_file))
-            if not index_file.is_file() or index_file.stat().st_size == 0:
-                raise OSError("FAISS index file was not written cleanly.")
+                faiss.write_index(next_index, str(index_file))
+                if not index_file.is_file() or index_file.stat().st_size == 0:
+                    raise OSError("FAISS index file was not written cleanly.")
 
-            metadata_payload = {
-                "schema_version": SCHEMA_VERSION,
-                "embedding_model": self.embedding_model,
-                "dimension": dim,
-                "next_vector_id": next_vector_id,
-                "chunks": {str(vid): chunk for vid, chunk in next_chunks.items()},
-            }
-            _write_json_fsync(metadata_file, metadata_payload)
+                metadata_payload = {
+                    "schema_version": SCHEMA_VERSION,
+                    "embedding_model": self.embedding_model,
+                    "dimension": dim,
+                    "next_vector_id": next_vector_id,
+                    "chunks": {str(vid): chunk for vid, chunk in next_chunks.items()},
+                }
+                _write_json_fsync(metadata_file, metadata_payload)
 
-            documents_payload = {
-                "schema_version": SCHEMA_VERSION,
-                "documents": next_doc_manager.to_dict(),
-            }
-            _write_json_fsync(documents_file, documents_payload)
+                documents_payload = {
+                    "schema_version": SCHEMA_VERSION,
+                    "documents": next_doc_manager.to_dict(),
+                }
+                _write_json_fsync(documents_file, documents_payload)
 
-            os.replace(staging_dir, final_gen_dir)
+                _safe_replace(staging_dir, final_gen_dir)
 
-            manifest_payload = {
-                "schema_version": SCHEMA_VERSION,
-                "active_generation": new_generation,
-                "embedding_model": self.embedding_model,
-                "dimension": dim,
-                "next_vector_id": next_vector_id,
-                "index_file": f"{GENERATIONS_DIRNAME}/{gen_name}/{INDEX_FILENAME}",
-                "metadata_file": f"{GENERATIONS_DIRNAME}/{gen_name}/{METADATA_FILENAME}",
-                "documents_file": f"{GENERATIONS_DIRNAME}/{gen_name}/{DOCUMENTS_FILENAME}",
-            }
-            _write_json_fsync(tmp_manifest, manifest_payload)
-            os.replace(tmp_manifest, self.manifest_path)
+                manifest_payload = {
+                    "schema_version": SCHEMA_VERSION,
+                    "active_generation": new_generation,
+                    "embedding_model": self.embedding_model,
+                    "dimension": dim,
+                    "next_vector_id": next_vector_id,
+                    "index_file": f"{GENERATIONS_DIRNAME}/{gen_name}/{INDEX_FILENAME}",
+                    "metadata_file": f"{GENERATIONS_DIRNAME}/{gen_name}/{METADATA_FILENAME}",
+                    "documents_file": f"{GENERATIONS_DIRNAME}/{gen_name}/{DOCUMENTS_FILENAME}",
+                }
+                _write_json_fsync(tmp_manifest, manifest_payload)
+                _safe_replace(tmp_manifest, self.manifest_path)
 
-        except Exception as exc:
-            logger.exception("Failed to persist vector store generation %d", new_generation)
-            for leftover in (staging_dir, final_gen_dir):
-                if leftover.exists():
-                    shutil.rmtree(leftover, ignore_errors=True)
-            if tmp_manifest.exists():
-                try:
-                    tmp_manifest.unlink()
-                except OSError:
-                    pass
-            raise VectorStorePersistenceError(
-                f"Failed to save vector database to '{self.store_dir}': {exc}"
-            ) from exc
+            except Exception as exc:
+                logger.exception("Failed to persist vector store generation %d", new_generation)
+                for leftover in (staging_dir, final_gen_dir):
+                    if leftover.exists():
+                        shutil.rmtree(leftover, ignore_errors=True)
+                if tmp_manifest.exists():
+                    try:
+                        tmp_manifest.unlink()
+                    except OSError:
+                        pass
+                raise VectorStorePersistenceError(
+                    f"Failed to save vector database to '{self.store_dir}': {exc}"
+                ) from exc
 
-        # Commit in-memory state ONLY after manifest flip succeeded
-        self._index = next_index
-        self._chunks = next_chunks
-        self._document_manager = next_doc_manager
-        self._next_vector_id = next_vector_id
-        self._active_generation = new_generation
-        self._cleanup_old_generations(keep_generation=new_generation)
+            # Commit in-memory state ONLY after manifest flip succeeded
+            self._state = _GenerationState(
+                generation=new_generation,
+                index=next_index,
+                chunks=next_chunks,
+                document_manager=next_doc_manager,
+                next_vector_id=next_vector_id,
+            )
+            self._cleanup_old_generations(keep_generation=new_generation)
 
     def is_document_indexed(self, document_id: str) -> bool:
-        return self._document_manager.is_indexed(document_id)
+        return self._state.document_manager.is_indexed(document_id)
 
     def get_document(self, document_id: str) -> dict[str, Any] | None:
-        return self._document_manager.get_document(document_id)
+        return self._state.document_manager.get_document(document_id)
 
     def list_documents(self) -> list[dict[str, Any]]:
-        return self._document_manager.list_documents()
+        return self._state.document_manager.list_documents()
 
     def get_document_chunks(
         self,
@@ -558,7 +809,8 @@ class FAISSVectorStore:
         end_page: int | None = None,
     ) -> list[dict[str, Any]]:
         """Return deep-copied chunks strictly for one document in reading order."""
-        if not self.is_document_indexed(document_id):
+        state = self._state
+        if not state.document_manager.is_indexed(document_id):
             raise KeyError(f"Document '{document_id}' is not indexed.")
 
         if start_page is not None and (
@@ -572,10 +824,10 @@ class FAISSVectorStore:
         if start_page is not None and end_page is not None and start_page > end_page:
             raise ValueError("start_page cannot be greater than end_page.")
 
-        vector_ids = self._document_manager.get_vector_ids(document_id)
+        vector_ids = state.document_manager.get_vector_ids(document_id)
         doc_chunks: list[dict[str, Any]] = []
         for vid in vector_ids:
-            chunk = self._chunks.get(vid)
+            chunk = state.chunks.get(vid)
             if chunk is None:
                 raise VectorStoreCorruptionError(
                     f"Document '{document_id}' references missing chunk metadata for vector {vid}."
@@ -589,7 +841,7 @@ class FAISSVectorStore:
                 continue
             if end_page is not None and page > end_page:
                 continue
-            doc_chunks.append(deepcopy(chunk))
+            doc_chunks.append(_clone_chunk_metadata(chunk))
 
         doc_chunks.sort(
             key=lambda item: (int(item["page"]), int(item["chunk_index"]), int(item["vector_id"]))
@@ -614,119 +866,120 @@ class FAISSVectorStore:
         skip_duplicates: bool = True,
     ) -> dict[str, Any]:
         """Add chunks and embeddings for one document atomically."""
-        if not isinstance(document_id, str) or not document_id.strip():
-            raise ValueError("document_id must be a non-empty string.")
-        if not isinstance(filename, str) or not filename.strip():
-            raise ValueError("filename must be a non-empty string.")
+        with self._write_lock:
+            if not isinstance(document_id, str) or not document_id.strip():
+                raise ValueError("document_id must be a non-empty string.")
+            if not isinstance(filename, str) or not filename.strip():
+                raise ValueError("filename must be a non-empty string.")
 
-        if self.is_document_indexed(document_id):
-            existing = self.get_document(document_id)
-            if not skip_duplicates:
-                raise DuplicateDocumentError(
-                    f"Document '{filename}' (id={document_id[:12]}) is already indexed."
+            if self.is_document_indexed(document_id):
+                existing = self.get_document(document_id)
+                if not skip_duplicates:
+                    raise DuplicateDocumentError(
+                        f"Document '{filename}' (id={document_id[:12]}) is already indexed."
+                    )
+                return {
+                    "status": "duplicate",
+                    "already_indexed": True,
+                    "document_id": document_id,
+                    "filename": existing["filename"],
+                    "page_count": existing["page_count"],
+                    "chunks_generated": existing["chunk_count"],
+                    "embeddings_generated": 0,
+                    "embedding_dimension": existing["embedding_dimension"],
+                    "total_vectors": self.total_vectors,
+                    "total_documents": self.total_documents,
+                    "vector_ids": list(existing["vector_ids"]),
+                }
+
+            if not chunks:
+                raise ValueError("Cannot index a document with zero chunks.")
+
+            vectors = np.ascontiguousarray(embeddings, dtype=np.float32)
+            if vectors.ndim != 2 or vectors.shape[0] != len(chunks):
+                raise ValueError(
+                    f"Embeddings count ({vectors.shape[0] if vectors.ndim == 2 else 'invalid'}) "
+                    f"must match chunks count ({len(chunks)})."
                 )
+            if not np.all(np.isfinite(vectors)):
+                raise ValueError("Embeddings contain NaN or Inf values.")
+
+            if self.embedding_dimension is None:
+                self.embedding_dimension = int(vectors.shape[1])
+            expected_dim = self._resolve_dimension()
+            if vectors.shape[1] != expected_dim:
+                raise VectorStoreCompatibilityError(
+                    f"Embedding dimension mismatch: store expects {expected_dim}, "
+                    f"received {vectors.shape[1]}."
+                )
+
+            current_index = self._ensure_index_initialized()
+            staged_index = faiss.clone_index(current_index)
+            staged_chunks = self._state.chunks.copy()
+            staged_docs = self._state.document_manager.clone()
+
+            allocated_ids = list(range(self._state.next_vector_id, self._state.next_vector_id + len(chunks)))
+            next_vector_id = self._state.next_vector_id + len(chunks)
+
+            for vid, chunk in zip(allocated_ids, chunks):
+                text = chunk.get("text", "")
+                if not isinstance(text, str) or not text.strip():
+                    raise ValueError("Cannot index an empty chunk.")
+
+                chunk_index = int(chunk.get("chunk_index", 0))
+                if chunk_index <= 0:
+                    raise ValueError("Chunk metadata must include a positive chunk_index.")
+
+                page = int(chunk["page"])
+                chunk_id = chunk.get("chunk_id") or f"{document_id[:12]}_p{page}_c{chunk_index}"
+
+                staged_chunks[vid] = {
+                    "chunk_id": str(chunk_id),
+                    "vector_id": int(vid),
+                    "document_id": document_id,
+                    "filename": filename,
+                    "page": page,
+                    "page_range": str(chunk.get("page_range", page)),
+                    "chunk_index": chunk_index,
+                    "text": text,
+                    "token_count": int(chunk.get("token_count", len(text.split()))),
+                }
+
+            doc_record = DocumentManager.build_record(
+                document_id=document_id,
+                filename=filename,
+                page_count=page_count,
+                vector_ids=allocated_ids,
+                embedding_model=self.embedding_model,
+                embedding_dimension=expected_dim,
+                chunk_size_tokens=chunk_size_tokens,
+                chunk_overlap_tokens=chunk_overlap_tokens,
+            )
+            staged_docs.register_document(doc_record)
+
+            id_array = np.array(allocated_ids, dtype=np.int64)
+            staged_index.add_with_ids(vectors, id_array)
+
+            self._commit_transaction(
+                next_index=staged_index,
+                next_chunks=staged_chunks,
+                next_doc_manager=staged_docs,
+                next_vector_id=next_vector_id,
+            )
+
             return {
-                "status": "duplicate",
-                "already_indexed": True,
-                "document_id": document_id,
-                "filename": existing["filename"],
-                "page_count": existing["page_count"],
-                "chunks_generated": existing["chunk_count"],
-                "embeddings_generated": 0,
-                "embedding_dimension": existing["embedding_dimension"],
-                "total_vectors": self.total_vectors,
-                "total_documents": self.total_documents,
-                "vector_ids": list(existing["vector_ids"]),
-            }
-
-        if not chunks:
-            raise ValueError("Cannot index a document with zero chunks.")
-
-        vectors = np.ascontiguousarray(embeddings, dtype=np.float32)
-        if vectors.ndim != 2 or vectors.shape[0] != len(chunks):
-            raise ValueError(
-                f"Embeddings count ({vectors.shape[0] if vectors.ndim == 2 else 'invalid'}) "
-                f"must match chunks count ({len(chunks)})."
-            )
-        if not np.all(np.isfinite(vectors)):
-            raise ValueError("Embeddings contain NaN or Inf values.")
-
-        if self.embedding_dimension is None:
-            self.embedding_dimension = int(vectors.shape[1])
-        expected_dim = self._resolve_dimension()
-        if vectors.shape[1] != expected_dim:
-            raise VectorStoreCompatibilityError(
-                f"Embedding dimension mismatch: store expects {expected_dim}, "
-                f"received {vectors.shape[1]}."
-            )
-
-        current_index = self._ensure_index_initialized()
-        staged_index = faiss.clone_index(current_index)
-        staged_chunks = deepcopy(self._chunks)
-        staged_docs = self._document_manager.clone()
-
-        allocated_ids = list(range(self._next_vector_id, self._next_vector_id + len(chunks)))
-        next_vector_id = self._next_vector_id + len(chunks)
-
-        for vid, chunk in zip(allocated_ids, chunks):
-            text = chunk.get("text", "")
-            if not isinstance(text, str) or not text.strip():
-                raise ValueError("Cannot index an empty chunk.")
-
-            chunk_index = int(chunk.get("chunk_index", 0))
-            if chunk_index <= 0:
-                raise ValueError("Chunk metadata must include a positive chunk_index.")
-
-            page = int(chunk["page"])
-            chunk_id = chunk.get("chunk_id") or f"{document_id[:12]}_p{page}_c{chunk_index}"
-
-            staged_chunks[vid] = {
-                "chunk_id": str(chunk_id),
-                "vector_id": int(vid),
+                "status": "indexed",
+                "already_indexed": False,
                 "document_id": document_id,
                 "filename": filename,
-                "page": page,
-                "page_range": str(chunk.get("page_range", page)),
-                "chunk_index": chunk_index,
-                "text": text,
-                "token_count": int(chunk.get("token_count", len(text.split()))),
+                "page_count": page_count,
+                "chunks_generated": len(chunks),
+                "embeddings_generated": len(chunks),
+                "embedding_dimension": expected_dim,
+                "total_vectors": self.total_vectors,
+                "total_documents": self.total_documents,
+                "vector_ids": allocated_ids,
             }
-
-        doc_record = DocumentManager.build_record(
-            document_id=document_id,
-            filename=filename,
-            page_count=page_count,
-            vector_ids=allocated_ids,
-            embedding_model=self.embedding_model,
-            embedding_dimension=expected_dim,
-            chunk_size_tokens=chunk_size_tokens,
-            chunk_overlap_tokens=chunk_overlap_tokens,
-        )
-        staged_docs.register_document(doc_record)
-
-        id_array = np.array(allocated_ids, dtype=np.int64)
-        staged_index.add_with_ids(vectors, id_array)
-
-        self._commit_transaction(
-            next_index=staged_index,
-            next_chunks=staged_chunks,
-            next_doc_manager=staged_docs,
-            next_vector_id=next_vector_id,
-        )
-
-        return {
-            "status": "indexed",
-            "already_indexed": False,
-            "document_id": document_id,
-            "filename": filename,
-            "page_count": page_count,
-            "chunks_generated": len(chunks),
-            "embeddings_generated": len(chunks),
-            "embedding_dimension": expected_dim,
-            "total_vectors": self.total_vectors,
-            "total_documents": self.total_documents,
-            "vector_ids": allocated_ids,
-        }
 
     def add_pdf(
         self,
@@ -737,6 +990,7 @@ class FAISSVectorStore:
         chunk_size: int | None = None,
         chunk_overlap: int | None = None,
         skip_duplicates: bool = True,
+        progress_callback: Callable[[int, int, str], None] | None = None,
     ) -> dict[str, Any]:
         """Extract, chunk, embed, and persistently index an uploaded PDF."""
         doc_id = file_hash(pdf_file)
@@ -766,9 +1020,18 @@ class FAISSVectorStore:
                 "vector_ids": list(existing["vector_ids"]),
             }
 
-        text_by_page = extract_pdf_text(pdf_file)
+        def _on_extract_progress(p: int, total: int, msg: str) -> None:
+            if progress_callback is not None:
+                progress_callback(p, total, f"Stage 1/4 (Extraction): {msg}")
+
+        text_by_page = extract_pdf_text(pdf_file, progress_callback=_on_extract_progress)
         if not text_by_page:
             raise ValueError("No readable text was found in this PDF.")
+
+        if progress_callback is not None:
+            progress_callback(
+                1, 4, f"Stage 2/4 (Chunking): Splitting {len(text_by_page)} pages into token chunks..."
+            )
 
         used_chunk_size = CHUNK_SIZE_TOKENS if chunk_size is None else chunk_size
         used_chunk_overlap = CHUNK_OVERLAP_TOKENS if chunk_overlap is None else chunk_overlap
@@ -794,8 +1057,23 @@ class FAISSVectorStore:
                 f"store model '{self.embedding_model}'."
             )
 
+        def _on_embed_progress(c: int, total: int, msg: str) -> None:
+            if progress_callback is not None:
+                progress_callback(c, total, f"Stage 3/4 (Embeddings): {msg}")
+
         texts = [chunk["text"] for chunk in chunks]
-        embeddings = service.embed_texts(texts, normalize=True)
+        embeddings = service.embed_texts(
+            texts,
+            normalize=True,
+            progress_callback=_on_embed_progress,
+        )
+
+        if progress_callback is not None:
+            progress_callback(
+                len(chunks),
+                len(chunks),
+                f"Stage 4/4 (FAISS Indexing): Persisting {len(chunks)} vectors to transaction log...",
+            )
 
         return self.add_document_chunks(
             document_id=doc_id,
@@ -810,43 +1088,44 @@ class FAISSVectorStore:
 
     def delete_document(self, document_id: str) -> dict[str, Any]:
         """Remove a single document's vectors and metadata without affecting others."""
-        if not self.is_document_indexed(document_id):
-            raise KeyError(f"Document '{document_id}' is not indexed.")
+        with self._write_lock:
+            if not self.is_document_indexed(document_id):
+                raise KeyError(f"Document '{document_id}' is not indexed.")
 
-        current_index = self._ensure_index_initialized()
-        staged_index = faiss.clone_index(current_index)
-        staged_chunks = deepcopy(self._chunks)
-        staged_docs = self._document_manager.clone()
+            current_index = self._ensure_index_initialized()
+            staged_index = faiss.clone_index(current_index)
+            staged_chunks = self._state.chunks.copy()
+            staged_docs = self._state.document_manager.clone()
 
-        removed_doc = staged_docs.remove_document(document_id)
-        vector_ids = removed_doc["vector_ids"]
+            removed_doc = staged_docs.remove_document(document_id)
+            vector_ids = removed_doc["vector_ids"]
 
-        removed_count = int(staged_index.remove_ids(np.array(vector_ids, dtype=np.int64)))
-        if removed_count != len(vector_ids):
-            raise VectorStoreCorruptionError(
-                f"Expected to remove {len(vector_ids)} vectors for document "
-                f"'{document_id}', but FAISS removed {removed_count}."
+            removed_count = int(staged_index.remove_ids(np.array(vector_ids, dtype=np.int64)))
+            if removed_count != len(vector_ids):
+                raise VectorStoreCorruptionError(
+                    f"Expected to remove {len(vector_ids)} vectors for document "
+                    f"'{document_id}', but FAISS removed {removed_count}."
+                )
+
+            for vid in vector_ids:
+                staged_chunks.pop(vid, None)
+
+            # Monotonic next_vector_id is intentionally preserved (never decremented/reused)
+            self._commit_transaction(
+                next_index=staged_index,
+                next_chunks=staged_chunks,
+                next_doc_manager=staged_docs,
+                next_vector_id=self._state.next_vector_id,
             )
 
-        for vid in vector_ids:
-            staged_chunks.pop(vid, None)
-
-        # Monotonic next_vector_id is intentionally preserved (never decremented/reused)
-        self._commit_transaction(
-            next_index=staged_index,
-            next_chunks=staged_chunks,
-            next_doc_manager=staged_docs,
-            next_vector_id=self._next_vector_id,
-        )
-
-        return {
-            "status": "deleted",
-            "document_id": document_id,
-            "filename": removed_doc["filename"],
-            "removed_vectors": removed_count,
-            "total_vectors": self.total_vectors,
-            "total_documents": self.total_documents,
-        }
+            return {
+                "status": "deleted",
+                "document_id": document_id,
+                "filename": removed_doc["filename"],
+                "removed_vectors": removed_count,
+                "total_vectors": self.total_vectors,
+                "total_documents": self.total_documents,
+            }
 
     def search(
         self,
@@ -856,7 +1135,10 @@ class FAISSVectorStore:
         document_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Search FAISS for top-K matching chunks by cosine similarity."""
-        if self._index is None or self.total_vectors == 0:
+        state = self._state
+        active_index = state.index
+        active_chunks = state.chunks
+        if active_index is None or active_index.ntotal == 0:
             raise ValueError("No PDF index is available. Upload a PDF first.")
 
         k = TOP_K if top_k is None else top_k
@@ -875,18 +1157,18 @@ class FAISSVectorStore:
         if not np.all(np.isfinite(qvec)):
             raise ValueError("Query vector contains non-finite values.")
 
-        if document_id is not None and not self.is_document_indexed(document_id):
+        if document_id is not None and not state.document_manager.is_indexed(document_id):
             return []
 
-        search_k = self.total_vectors if document_id is not None else min(k, self.total_vectors)
-        scores, ids = self._index.search(qvec, search_k)
+        search_k = active_index.ntotal if document_id is not None else min(k, int(active_index.ntotal))
+        scores, ids = active_index.search(qvec, search_k)
 
         results: list[dict[str, Any]] = []
         for score, raw_vid in zip(scores[0], ids[0]):
             vid = int(raw_vid)
             if vid == -1:
                 continue
-            chunk = self._chunks.get(vid)
+            chunk = active_chunks.get(vid)
             if chunk is None:
                 raise VectorStoreCorruptionError(
                     f"FAISS returned vector ID {vid} that is missing from metadata."
@@ -919,17 +1201,20 @@ class FAISSVectorStore:
 
     def reset_store(self) -> None:
         """Delete persisted files and reset to an empty store."""
-        if self.store_dir.exists():
-            shutil.rmtree(self.store_dir)
-        self._active_generation = 0
-        self._next_vector_id = 1
-        self._chunks = {}
-        self._document_manager = DocumentManager()
-        self._index = (
-            _create_empty_index(self.embedding_dimension)
-            if self.embedding_dimension is not None
-            else None
-        )
+        with self._write_lock:
+            if self.store_dir.exists():
+                shutil.rmtree(self.store_dir)
+            self._state = _GenerationState(
+                generation=0,
+                index=(
+                    _create_empty_index(self.embedding_dimension)
+                    if self.embedding_dimension is not None
+                    else None
+                ),
+                chunks={},
+                document_manager=DocumentManager(),
+                next_vector_id=1,
+            )
 
 
 def get_default_vector_store(
